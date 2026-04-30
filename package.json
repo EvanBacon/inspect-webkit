@@ -1,0 +1,65 @@
+{
+  "name": "inspect-webkit",
+  "version": "0.1.0",
+  "description": "Headlessly list debuggable Safari / WKWebView targets across iOS devices and Simulators, and bridge them to Chrome DevTools Protocol. Pure Bun/TypeScript.",
+  "type": "module",
+  "main": "src/index.ts",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "inspect-webkit": "./bin/cli.ts"
+  },
+  "files": [
+    "src",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "list": "bun bin/cli.ts list",
+    "devices": "bun bin/cli.ts devices",
+    "cdp": "bun bin/cli.ts cdp",
+    "test": "bun test"
+  },
+  "keywords": [
+    "safari",
+    "webkit",
+    "ios",
+    "simulator",
+    "wkwebview",
+    "web-inspector",
+    "devtools",
+    "cdp",
+    "chrome-devtools-protocol",
+    "debugger",
+    "bun"
+  ],
+  "author": {
+    "name": "Evan Bacon",
+    "email": "baconbrix@gmail.com",
+    "url": "https://evanbacon.dev"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EvanBacon/inspect-webkit.git"
+  },
+  "homepage": "https://github.com/EvanBacon/inspect-webkit#readme",
+  "bugs": {
+    "url": "https://github.com/EvanBacon/inspect-webkit/issues"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.13"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
