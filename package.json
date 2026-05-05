@@ -1,6 +1,6 @@
 {
   "name": "inspect-webkit",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Headlessly list debuggable Safari / WKWebView targets across iOS devices and Simulators, and bridge them to Chrome DevTools Protocol. Pure Bun/TypeScript.",
   "type": "module",
   "main": "dist/index.js",
