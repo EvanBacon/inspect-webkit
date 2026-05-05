@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { encodeXml, decodeXml, decodeBinary, decode } from "../plist";
 
 test("xml roundtrip — primitives", () => {
@@ -50,7 +51,7 @@ test("xml — usbmuxd ListDevices reply shape", () => {
   expect(v.DeviceList[0].DeviceID).toBe(5);
 });
 
-test("bplist00 — decode real plutil-generated file", async () => {
+test.skipIf(!existsSync("/tmp/test.bplist"))("bplist00 — decode real plutil-generated file", async () => {
   const buf = new Uint8Array(await readFile("/tmp/test.bplist"));
   const v = decodeBinary(buf) as any;
   expect(v.name).toBe("WIRTitleKey");
