@@ -2,6 +2,7 @@
 // inspect-webkit CLI — bridge iOS Safari / WKWebView debug targets to the
 // Chrome DevTools Protocol.
 
+import { execSync } from "node:child_process";
 import { Command, Option } from "commander";
 import { startCdpServer, startBunCdpServer } from "../src/index";
 
@@ -9,7 +10,11 @@ const program = new Command();
 
 program
   .name("inspect-webkit")
-  .description("bridge iOS Safari / WKWebView debug targets to CDP")
+  .description(
+    "stand up a Chrome DevTools Protocol bridge backed by Safari's Web Inspector",
+  )
+  .addOption(new Option("-p, --port <port>", "listen port").default(9222).argParser(Number))
+  .addOption(new Option("-H, --host <host>", "listen host").default("localhost"))
   .addHelpText(
     "after",
     `
@@ -24,15 +29,7 @@ requirements:
   - WKWebView on iOS 16.4+: app must set isInspectable = true
 `,
   )
-  .showHelpAfterError();
-
-program
-  .command("cdp", { isDefault: true })
-  .description(
-    "stand up a Chrome DevTools Protocol bridge backed by Safari's Web Inspector",
-  )
-  .addOption(new Option("-p, --port <port>", "listen port").default(9222).argParser(Number))
-  .addOption(new Option("-H, --host <host>", "listen host").default("localhost"))
+  .showHelpAfterError()
   .action(async (opts: { port: number; host: string }) => {
     const server = await startCdpServer({ port: opts.port, host: opts.host });
     process.on("SIGINT", () => {
@@ -67,6 +64,27 @@ program
   });
 
 program.parseAsync().catch((e) => {
+  if (e && (e as NodeJS.ErrnoException).code === "EADDRINUSE") {
+    const port = (e as { port?: number }).port;
+    let hint = "";
+    if (typeof port === "number") {
+      try {
+        const out = execSync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`, {
+          stdio: ["ignore", "pipe", "ignore"],
+        })
+          .toString()
+          .trim();
+        const pids = out ? Array.from(new Set(out.split(/\s+/))) : [];
+        if (pids.length > 0) {
+          hint = `\n  PID ${pids.join(", ")} is listening — run \`kill ${pids.join(" ")}\` to free it, or pass --port <other>.`;
+        }
+      } catch {}
+    }
+    console.error(
+      `Error: port ${port ?? "?"} is already in use.${hint || "\n  Pass --port <other> to use a different port."}`,
+    );
+    process.exit(1);
+  }
   console.error(e instanceof Error ? (e.stack ?? e.message) : e);
   process.exit(1);
 });

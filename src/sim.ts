@@ -26,7 +26,6 @@ export async function findSimulatorSockets(): Promise<SimRuntime[]> {
   const sockets = new Map<string, number>(); // path -> pid
   for (const line of out.split("\n")) {
     if (!/com\.apple\.webinspectord_sim\.socket\b/.test(line)) continue;
-    if (!line.startsWith("webinspec")) continue;
     const cols = line.split(/\s+/);
     const pid = Number(cols[1]);
     const path = cols[cols.length - 1]!;

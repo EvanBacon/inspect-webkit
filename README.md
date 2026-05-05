@@ -15,7 +15,7 @@ targets as a flat machine-readable list.
 
 ```bash
 bun add inspect-webkit          # as a dependency
-bunx inspect-webkit list        # one-off, no install
+bunx inspect-webkit             # one-off, no install
 ```
 
 No native dependencies. Pure Bun/TypeScript end-to-end.
@@ -23,7 +23,7 @@ No native dependencies. Pure Bun/TypeScript end-to-end.
 ## CLI
 
 ```bash
-inspect-webkit cdp [--port 9222] # CDP bridge: debug iOS pages from Chrome / VS Code
+inspect-webkit [--port 9222] # CDP bridge: debug iOS pages from Chrome / VS Code
 ```
 
 From a checkout, replace `inspect-webkit` with `bun bin/cli.ts`.
@@ -43,7 +43,7 @@ server.stop();
 ### CDP bridge — debug iOS pages with Chrome DevTools or VS Code
 
 ```bash
-inspect-webkit cdp                # serves http://localhost:9222
+inspect-webkit                # serves http://localhost:9222
 ```
 
 This stands up a Chrome DevTools Protocol endpoint backed by Safari's Web
@@ -150,7 +150,7 @@ L1–L4 ladder and the OK/ERR baseline.
 Example — list every debuggable target:
 
 ```
-$ inspect-webkit cdp &
+$ inspect-webkit &
 $ curl -s http://localhost:9222/json/list | jq '.[] | {title, url, webSocketDebuggerUrl}'
 ```
 
@@ -238,7 +238,7 @@ the full guide.
 bun test
 
 # L3 — CDP↔WIR translation (boot a sim, then)
-inspect-webkit cdp --port 9222 &
+inspect-webkit --port 9222 &
 WS=$(curl -s http://localhost:9222/json/list | jq -r '.[0].webSocketDebuggerUrl')
 bun scripts/e2e/cdp-probe.ts "$WS"
 bun scripts/e2e/cdp-domains.ts "$WS"

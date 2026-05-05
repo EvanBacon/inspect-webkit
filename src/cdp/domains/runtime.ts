@@ -37,6 +37,35 @@ export function installRuntimeFilters(t: Target, ctx: DomainCtx) {
   t.addMessageFilter("tools::Runtime.evaluate", (msg) => {
     const p = msg.params;
     if (!p) return Promise.resolve(msg);
+    // Eager-eval: DevTools sends Runtime.evaluate with throwOnSideEffect
+    // every keystroke to render the inline preview. V8 honors the flag and
+    // refuses anything mutating; Safari's WIR has no equivalent and would
+    // run the half-typed expression for real. Short-circuit with the same
+    // synthetic "side-effect" exception V8 returns, so DevTools just
+    // suppresses the preview.
+    if (p.throwOnSideEffect) {
+      return swallowWith(t, msg, {
+        result: {
+          type: "object",
+          subtype: "error",
+          className: "EvalError",
+          description: "EvalError: Possible side-effect in debug-evaluate",
+        },
+        exceptionDetails: {
+          exceptionId: 0,
+          text: "EvalError: Possible side-effect in debug-evaluate",
+          lineNumber: 0,
+          columnNumber: 0,
+          url: "",
+          exception: {
+            type: "object",
+            subtype: "error",
+            className: "EvalError",
+            description: "EvalError: Possible side-effect in debug-evaluate",
+          },
+        },
+      });
+    }
     if ("silent" in p) {
       p.doNotPauseOnExceptionsAndMuteConsole = !!p.silent;
       delete p.silent;

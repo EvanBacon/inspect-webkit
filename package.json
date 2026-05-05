@@ -1,6 +1,6 @@
 {
   "name": "inspect-webkit",
-  "version": "0.0.0",
+  "version": "0.0.3",
   "description": "Headlessly list debuggable Safari / WKWebView targets across iOS devices and Simulators, and bridge them to Chrome DevTools Protocol. Pure Bun/TypeScript.",
   "type": "module",
   "main": "dist/index.js",
@@ -21,7 +21,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "cdp": "bun bin/cli.ts cdp",
+    "cdp": "bun bin/cli.ts",
     "build": "rm -rf dist && bun build bin/cli.ts --target=node --outfile dist/cli.js && bun build src/index.ts --target=node --outfile dist/index.js && tsc -p tsconfig.build.json",
     "prepublishOnly": "bun run build",
     "test": "bun test"

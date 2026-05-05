@@ -131,7 +131,11 @@ function sendIndexHtml(
 
 export function listen(server: http.Server, host: string, port: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    server.once("error", reject);
+    server.once("error", (err: NodeJS.ErrnoException & { port?: number; host?: string }) => {
+      if (err.port == null) err.port = port;
+      if (err.host == null) err.host = host;
+      reject(err);
+    });
     // "localhost" resolves to either 127.0.0.1 or ::1 depending on the
     // first DNS answer — half the loopback gets stranded. Bind dual-stack
     // (::, IPV6_V6ONLY off) so both IPv4 and IPv6 clients reach us.

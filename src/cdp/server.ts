@@ -53,6 +53,12 @@ type CdpTargetEntry = {
   title: string;
   url: string;
   type: string;
+  /**
+   * True when WIR reports a debugger connection on this page from a sender
+   * we don't own. Safari greys out such entries in its Develop menu — only
+   * one inspector may attach to a WebKit page at a time.
+   */
+  inUseByOtherInspector: boolean;
 };
 
 const REFRESH_MS = 1500;
@@ -63,6 +69,19 @@ export type CdpServer = {
   stop(): void;
   /** Snapshot of current debuggable targets. */
   getTargets(): CdpTargetEntry[];
+  /**
+   * Flash an inspectable target on the device — the way Safari does when you
+   * hover an entry under Develop → device menu. Pass `on=true` to overlay
+   * the page, `on=false` to clear. Safe to call repeatedly.
+   */
+  highlightTarget(targetId: string, on: boolean): Promise<void>;
+  /**
+   * Drop the cached hover-highlight session for a target (or all of them
+   * when `targetId` is omitted). Hosts should call this when their picker
+   * closes so we don't keep a WIR connection alive that would block other
+   * debuggers from attaching.
+   */
+  releaseHighlight(targetId?: string): void;
 };
 
 export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpServer> {
@@ -143,6 +162,12 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
             title: p.WIRTitleKey ?? "",
             url: p.WIRURLKey ?? "",
             type: p.WIRTypeKey ?? "",
+            // WIR sets WIRConnectionIdentifierKey on a page once any inspector
+            // (Safari Develop menu, chrome://inspect, our own bridge, ...)
+            // attaches. Empty/missing → no debugger attached.
+            connectionId: typeof p.WIRConnectionIdentifierKey === "string"
+              ? p.WIRConnectionIdentifierKey
+              : null,
           });
         }
         listingsByApp.set(`${src.id}:${appId}`, map);
@@ -174,6 +199,12 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
         const listing = listingsByApp.get(`${src.id}:${a.appId}`);
         if (!listing) continue;
         for (const p of listing.values()) {
+          // WIR allows only one debugger per page. If WIRConnectionIdentifierKey
+          // is set to a senderKey we don't own (Safari, chrome://inspect,
+          // another inspect-webkit instance), the page is unavailable. Sessions
+          // we created ourselves are inspectable from our own UI by definition.
+          const otherInspector =
+            !!p.connectionId && !sessions.has(p.connectionId);
           out.push({
             targetId: `${src.id}:${a.appId}:${p.pageId}`,
             source: src,
@@ -184,6 +215,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
             title: p.title,
             url: p.url,
             type: p.type,
+            inUseByOtherInspector: otherInspector,
           });
         }
       }
@@ -213,7 +245,11 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
           id: t.targetId,
           description: `${t.source.label}${t.bundleId ? ` (${t.bundleId})` : ""}`,
           title: t.title || t.appName,
-          url: t.url,
+          // chrome://inspect silently drops targets whose `url` isn't http(s) —
+          // Safari reports `file:///…/Foo.app/` for native WKWebViews, which
+          // would hide the entire group. Substitute about:blank so the row
+          // still renders. The real bundle path stays in `description`.
+          url: /^https?:/i.test(t.url) ? t.url : "about:blank",
           type: mapWIRType(t.type),
         }),
       ),
@@ -224,6 +260,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
 
   httpServer.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://placeholder");
+    console.error(`# ws upgrade: ${url.pathname}`);
     if (url.pathname === browserPath) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         attachBrowserWs(ws, {
@@ -244,6 +281,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       return;
     }
     if (!url.pathname.startsWith("/devtools/page/")) {
+      console.error(`# ws upgrade rejected: unknown path ${url.pathname}`);
       socket.destroy();
       return;
     }
@@ -307,20 +345,152 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     };
   }
 
+  // Hover-highlight sessions. Each target keeps its own short-lived CDP
+  // session so the host UI can flash an inspectable target the way Safari
+  // does when you hover an entry under Develop → device menu. We cache the
+  // session per target (DOM.getDocument is non-trivial), and idle-close it
+  // after 30s of no highlight activity.
+  type HighlightSession = {
+    cdp: CdpTarget;
+    close: () => void;
+    rootNodeIdPromise: Promise<number>;
+    idleTimer: ReturnType<typeof setTimeout> | null;
+  };
+  const highlightSessions = new Map<string, HighlightSession>();
+  const HIGHLIGHT_IDLE_MS = 8_000;
+
+  function getOrOpenHighlightSession(targetId: string): HighlightSession | null {
+    const existing = highlightSessions.get(targetId);
+    if (existing) return existing;
+    const entry = listTargets().find((t) => t.targetId === targetId);
+    if (!entry) return null;
+    const senderKey = crypto.randomUUID();
+    const fakeWs = { readyState: 1, send: () => {} } as unknown as WSWebSocket;
+    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, senderKey);
+    installIOSFilters(cdp);
+    sessions.set(senderKey, cdp);
+    const unsub = entry.source.wi.subscribe((m: WIMessage) => {
+      if (m.__selector !== "_rpc_applicationSentData:") return;
+      const arg = m.__argument as Record<string, any> | undefined;
+      if (!arg) return;
+      if (arg.WIRDestinationKey && arg.WIRDestinationKey !== senderKey) return;
+      if (arg.WIRApplicationIdentifierKey !== entry.appId) return;
+      if (
+        arg.WIRPageIdentifierKey !== undefined &&
+        Number(arg.WIRPageIdentifierKey) !== entry.pageId
+      )
+        return;
+      const data = arg.WIRMessageDataKey ?? arg.WIRSocketDataKey;
+      if (!data) return;
+      const text =
+        typeof data === "string" ? data : new TextDecoder().decode(data as Uint8Array);
+      cdp.onMessageFromTarget(text);
+    });
+    entry.source.wi.forwardSocketSetup(entry.appId, entry.pageId, senderKey);
+    // DOM.getDocument can stall if Safari hasn't dispatched Target.targetCreated
+    // yet — wrap in 5s so callers don't hang. We close the session below in
+    // the .catch on the cached promise.
+    const rootNodeIdPromise: Promise<number> = Promise.race([
+      cdp.callTarget("DOM.getDocument", { depth: 0 }).then((r: any) => r?.root?.nodeId as number),
+      new Promise<number>((_, reject) =>
+        setTimeout(() => reject(new Error("DOM.getDocument timeout")), 5_000),
+      ),
+    ]);
+    const session: HighlightSession = {
+      cdp,
+      rootNodeIdPromise,
+      idleTimer: null,
+      close() {
+        if (session.idleTimer) clearTimeout(session.idleTimer);
+        unsub();
+        try {
+          cdp.wi.forwardDidClose(cdp.appId, cdp.pageId, cdp.senderKey);
+        } catch {}
+        sessions.delete(senderKey);
+        highlightSessions.delete(targetId);
+      },
+    };
+    highlightSessions.set(targetId, session);
+    rootNodeIdPromise.catch(() => session.close());
+    return session;
+  }
+
+  function bumpHighlightIdle(session: HighlightSession) {
+    if (session.idleTimer) clearTimeout(session.idleTimer);
+    session.idleTimer = setTimeout(() => session.close(), HIGHLIGHT_IDLE_MS);
+  }
+
+  function releaseHighlight(targetId?: string): void {
+    if (targetId) {
+      highlightSessions.get(targetId)?.close();
+      return;
+    }
+    for (const sess of highlightSessions.values()) sess.close();
+  }
+
+  async function highlightTarget(targetId: string, on: boolean): Promise<void> {
+    const session = getOrOpenHighlightSession(targetId);
+    if (!session) return;
+    bumpHighlightIdle(session);
+    try {
+      if (on) {
+        const nodeId = await session.rootNodeIdPromise;
+        if (!nodeId) return;
+        await session.cdp.callTarget("DOM.highlightNode", {
+          nodeId,
+          highlightConfig: {
+            showInfo: false,
+            contentColor: { r: 111, g: 168, b: 220, a: 0.55 },
+            paddingColor: { r: 147, g: 196, b: 125, a: 0 },
+            borderColor: { r: 255, g: 229, b: 153, a: 0 },
+            marginColor: { r: 246, g: 178, b: 107, a: 0 },
+          },
+        });
+      } else {
+        await session.cdp.callTarget("DOM.hideHighlight", {});
+      }
+    } catch {
+      // Stale target — drop the session so the next call reopens.
+      session.close();
+    }
+  }
+
   function attachWs(ws: WSWebSocket, targetId: string) {
     const entry = listTargets().find((t) => t.targetId === targetId);
     if (!entry) {
+      console.error(
+        `# ws closed: unknown target ${targetId} (known: ${listTargets()
+          .map((t) => t.targetId)
+          .join(", ") || "none"})`,
+      );
       ws.close(1011, `unknown target ${targetId}`);
       return;
     }
     const sess = createPageSession(entry, (text) => {
       if (ws.readyState === 1) ws.send(text);
     });
+    // Liveness probe: if the peer disappears (browser tab killed, network
+    // glitch) the OS may not surface a TCP RST for minutes. Without this,
+    // the orphaned session would keep the WIR slot occupied and block other
+    // debuggers from attaching. Ping every 15s; tear down after one miss.
+    let alive = true;
+    ws.on("pong", () => { alive = true; });
+    const heartbeat = setInterval(() => {
+      if (!alive) {
+        try { ws.terminate(); } catch {}
+        return;
+      }
+      alive = false;
+      try { ws.ping(); } catch {}
+    }, 15_000);
     ws.on("message", (raw, isBinary) => {
       const text = isBinary ? new TextDecoder().decode(raw as Buffer) : raw.toString();
       sess.onMessageFromTools(text);
     });
-    ws.on("close", () => sess.close());
+    ws.on("close", () => {
+      clearInterval(heartbeat);
+      sess.close();
+    });
   }
 
   await listen(httpServer, host, port);
@@ -329,6 +499,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
   return {
     stop() {
       clearInterval(refreshTimer);
+      for (const sess of highlightSessions.values()) sess.close();
       wss.close();
       httpServer.close();
       for (const src of sources) {
@@ -341,6 +512,18 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     /** Snapshot of current debuggable targets. */
     getTargets(): CdpTargetEntry[] {
       return listTargets();
+    },
+    /**
+     * Flash an inspectable target on the device — the way Safari does when
+     * you hover an entry under Develop → device menu. `on=true` overlays the
+     * page; `on=false` clears it. Sessions are cached per-target and idle-
+     * closed after a short grace period.
+     */
+    highlightTarget(targetId: string, on: boolean): Promise<void> {
+      return highlightTarget(targetId, on);
+    },
+    releaseHighlight(targetId?: string): void {
+      releaseHighlight(targetId);
     },
   };
 }
