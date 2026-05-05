@@ -139,8 +139,20 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
   // Node fetch preserves bytes exactly. Cap map at 1k entries to bound memory.
   const requestUrls = new Map<
     string,
-    { url: string; method?: string; headers?: Record<string, string>; frameId?: string }
+    {
+      url: string;
+      method?: string;
+      headers?: Record<string, string>;
+      frameId?: string;
+      // Running tally of bytes seen via Network.dataReceived. We use this
+      // to short-circuit getResponseBody for empty bodies (preconnects,
+      // preloads, 204s) so the re-fetch queue isn't burning slots on them.
+      bytes: number;
+    }
   >();
+  // Per-fetch timeout. One slow/hanging URL otherwise wedges the queue and
+  // DevTools drops the WebSocket. 10s is enough for any sane asset.
+  const REFETCH_TIMEOUT_MS = 10_000;
   const REQUEST_LIMIT = 1024;
   // Cap re-fetched response size. DevTools' WebSocket frame ceiling kicks in
   // somewhere around ~10 MB on the receiving side; large base64 bodies were
@@ -305,6 +317,13 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
       });
       return null;
     }
+    // Short-circuit empty bodies (preconnects, 204s, preloads with 0 bytes).
+    // Re-fetching them is wasted work that ties up the queue and can block
+    // real bodies behind a slow no-op.
+    if (known.bytes === 0) {
+      t.fireResultToTools(msg.id!, { body: "", base64Encoded: false });
+      return null;
+    }
     queueRefetch(async () => {
       try {
         // Forward the original request headers so cookie/auth-gated assets
@@ -316,7 +335,14 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
           if (lk === "if-none-match" || lk === "if-modified-since" || lk === "host" || lk === "connection") continue;
           headers[k] = String(v);
         }
-        const res = await fetch(known.url, { headers, redirect: "follow" });
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), REFETCH_TIMEOUT_MS);
+        let res: Response;
+        try {
+          res = await fetch(known.url, { headers, redirect: "follow", signal: ac.signal });
+        } finally {
+          clearTimeout(timer);
+        }
         // Bail before downloading if the server tells us the body is too big.
         const cl = Number(res.headers.get("content-length") ?? "");
         if (Number.isFinite(cl) && cl > REFETCH_MAX_BYTES) {
@@ -378,6 +404,7 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
           method: p.request.method,
           headers: p.request.headers,
           frameId: p.frameId,
+          bytes: 0,
         });
       }
     }
@@ -400,6 +427,25 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
         p.encodedDataLength = enc;
       }
       Object.assign(p, { ...LF_DEFAULTS, ...p });
+      // Backfill our byte tally from the authoritative metrics. dataReceived
+      // events sometimes arrive with dataLength:0 even for non-empty bodies
+      // (Safari batches the actual byte count into loadingFinished.metrics).
+      if (typeof p.requestId === "string" && typeof enc === "number") {
+        const known = requestUrls.get(p.requestId);
+        if (known && enc > known.bytes) known.bytes = enc;
+      }
+    }
+    return Promise.resolve(msg);
+  });
+  // Tally bytes per requestId so getResponseBody can short-circuit empties.
+  t.addMessageFilter("target::Network.dataReceived", (msg) => {
+    const p = msg.params;
+    if (p && typeof p.requestId === "string") {
+      const known = requestUrls.get(p.requestId);
+      if (known) {
+        const n = Number(p.dataLength) || 0;
+        known.bytes += n;
+      }
     }
     return Promise.resolve(msg);
   });
