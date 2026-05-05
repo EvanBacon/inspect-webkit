@@ -142,8 +142,19 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
     { url: string; method?: string; headers?: Record<string, string>; frameId?: string }
   >();
   const REQUEST_LIMIT = 1024;
-  // Cap re-fetched response size to avoid OOM on huge assets.
-  const REFETCH_MAX_BYTES = 16 * 1024 * 1024;
+  // Cap re-fetched response size. DevTools' WebSocket frame ceiling kicks in
+  // somewhere around ~10 MB on the receiving side; large base64 bodies were
+  // observed to drop the connection ("Debugging connection was closed").
+  // 4 MB leaves headroom after base64 (~5.4 MB) plus JSON escaping.
+  const REFETCH_MAX_BYTES = 4 * 1024 * 1024;
+  // Serialize re-fetches so a click-storm in the Network panel can't
+  // fan out N concurrent downloads (each buffering a full body in RAM).
+  let refetchChain: Promise<unknown> = Promise.resolve();
+  const queueRefetch = <T>(fn: () => Promise<T>): Promise<T> => {
+    const next = refetchChain.then(fn, fn);
+    refetchChain = next.catch(() => {});
+    return next;
+  };
   // --- Pure renames -------------------------------------------------------
   for (const [from, to] of Object.entries(TOOLS_RENAMES)) {
     t.addMessageFilter(`tools::${from}`, (msg) => {
@@ -294,35 +305,47 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
       });
       return null;
     }
-    try {
-      // Forward the original request headers so cookie/auth-gated assets
-      // come back with the same body. Drop hop-by-hop and conditional
-      // headers — we want the full body, not a 304.
-      const headers: Record<string, string> = {};
-      for (const [k, v] of Object.entries(known.headers ?? {})) {
-        const lk = k.toLowerCase();
-        if (lk === "if-none-match" || lk === "if-modified-since" || lk === "host" || lk === "connection") continue;
-        headers[k] = String(v);
-      }
-      const res = await fetch(known.url, { headers, redirect: "follow" });
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.byteLength > REFETCH_MAX_BYTES) {
+    queueRefetch(async () => {
+      try {
+        // Forward the original request headers so cookie/auth-gated assets
+        // come back with the same body. Drop hop-by-hop and conditional
+        // headers — we want the full body, not a 304.
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(known.headers ?? {})) {
+          const lk = k.toLowerCase();
+          if (lk === "if-none-match" || lk === "if-modified-since" || lk === "host" || lk === "connection") continue;
+          headers[k] = String(v);
+        }
+        const res = await fetch(known.url, { headers, redirect: "follow" });
+        // Bail before downloading if the server tells us the body is too big.
+        const cl = Number(res.headers.get("content-length") ?? "");
+        if (Number.isFinite(cl) && cl > REFETCH_MAX_BYTES) {
+          t.fireErrorToTools(msg.id!, {
+            message: `Network.getResponseBody: response too large (${cl} bytes > ${REFETCH_MAX_BYTES}) — skipped re-fetch`,
+          });
+          // Drain so the connection can be reused.
+          try { await res.arrayBuffer(); } catch {}
+          return;
+        }
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.byteLength > REFETCH_MAX_BYTES) {
+          t.fireErrorToTools(msg.id!, {
+            message: `Network.getResponseBody: response too large (${buf.byteLength} bytes > ${REFETCH_MAX_BYTES})`,
+          });
+          return;
+        }
+        const mimeType = ((res.headers.get("content-type") ?? "").split(";")[0] ?? "").trim();
+        // Text-shaped MIMEs that round-trip cleanly as UTF-8. Everything else
+        // (images, fonts, video, octet-stream, …) goes back as base64.
+        const isText = /^(text\/|image\/svg\+xml|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded))$/.test(mimeType);
+        const body = isText ? buf.toString("utf8") : buf.toString("base64");
+        t.fireResultToTools(msg.id!, { body, base64Encoded: !isText });
+      } catch (e: any) {
         t.fireErrorToTools(msg.id!, {
-          message: `Network.getResponseBody: response too large (${buf.byteLength} bytes > ${REFETCH_MAX_BYTES})`,
+          message: `Network.getResponseBody re-fetch failed: ${e?.message ?? String(e)}`,
         });
-        return null;
       }
-      const mimeType = ((res.headers.get("content-type") ?? "").split(";")[0] ?? "").trim();
-      // Text-shaped MIMEs that round-trip cleanly as UTF-8. Everything else
-      // (images, fonts, video, octet-stream, …) goes back as base64.
-      const isText = /^(text\/|image\/svg\+xml|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded))$/.test(mimeType);
-      const body = isText ? buf.toString("utf8") : buf.toString("base64");
-      t.fireResultToTools(msg.id!, { body, base64Encoded: !isText });
-    } catch (e: any) {
-      t.fireErrorToTools(msg.id!, {
-        message: `Network.getResponseBody re-fetch failed: ${e?.message ?? String(e)}`,
-      });
-    }
+    });
     return null;
   });
 
