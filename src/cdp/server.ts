@@ -199,12 +199,14 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
         const listing = listingsByApp.get(`${src.id}:${a.appId}`);
         if (!listing) continue;
         for (const p of listing.values()) {
-          // WIR allows only one debugger per page. If WIRConnectionIdentifierKey
-          // is set to a senderKey we don't own (Safari, chrome://inspect,
-          // another inspect-webkit instance), the page is unavailable. Sessions
-          // we created ourselves are inspectable from our own UI by definition.
+          // WIR allows only one debugger per page. WIRConnectionIdentifierKey
+          // on a page is the *host* connection id (one per WebInspectorClient),
+          // not our per-WS senderKey — so we compare against this source's
+          // own connection id. A match means it's our own attachment (the
+          // iframe inspector or a hover-highlight session); anything else is
+          // a foreign debugger (Safari Develop menu, chrome://inspect, …).
           const otherInspector =
-            !!p.connectionId && !sessions.has(p.connectionId);
+            !!p.connectionId && p.connectionId !== src.wi.connection;
           out.push({
             targetId: `${src.id}:${a.appId}:${p.pageId}`,
             source: src,
