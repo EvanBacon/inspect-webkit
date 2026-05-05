@@ -3,18 +3,17 @@
 How to verify that a change to `inspect-webkit` actually works against a real
 iOS Web Inspector — without resorting to "open Chrome and squint" every time.
 
-The bridge has four layers of state, and your tests should match. Don't skip
-to the visual layer: each lower layer is faster, more reliable, and gives a
-better error message when it breaks.
+The bridge has three layers of state, and your tests should match. Don't
+skip to the visual layer: each lower layer is faster, more reliable, and
+gives a better error message when it breaks.
 
 ```
   L1  unit tests             — bun test (parsers, framing)            ms
-  L2  transport smoke        — bun src/sim.smoke.ts                   <1s
   L3  protocol e2e           — scripts/e2e/cdp-{probe,domains}.ts     ~2s
   L4  visual e2e             — Chrome DevTools or chrome-MCP          ~10s
 ```
 
-Always run L1–L3 before L4. L4 is for "does the user-facing UX still feel
+Always run L1+L3 before L4. L4 is for "does the user-facing UX still feel
 right" — it's not for catching protocol bugs.
 
 ---
@@ -27,26 +26,6 @@ bun test
 
 Covers parsers and pure logic in `src/`. Add a `*.test.ts` next to any new
 pure module. Sub-50ms today — keep it that way.
-
-## L2 — Transport smoke
-
-These talk to the actual OS sockets but don't touch CDP translation:
-
-```bash
-# devices over usbmuxd
-bun src/usbmux.smoke.ts
-
-# simulator socket discovery + connect
-SOCK=$(lsof -U | awk '/com\.apple\.webinspectord_sim\.socket/&&/webinspec/{print $NF;exit}')
-bun src/sim.smoke.ts "$SOCK"
-```
-
-Run these when you change `src/usbmux.ts`, `src/lockdown.ts`,
-`src/webinspector.ts`, or `src/sim.ts`.
-
-If L2 fails, L3/L4 will fail too — fix this first. Most "no targets" bugs
-are actually L2 problems (Web Inspector toggle off, app not inspectable,
-sim not booted).
 
 ## L3 — Protocol e2e (the layer most changes need)
 
@@ -405,8 +384,8 @@ Pre-flight (do this once per device, then forget it):
 - For a WKWebView host app on iOS 16.4+: app sets `webView.isInspectable = true`
 
 Then `curl http://localhost:9222/json/list` (after `bun bin/cli.ts cdp`) should
-populate. If empty: check the entitlement / Web Inspector toggle, or run the
-L2 smokes against `src/usbmux.ts` / `src/sim.ts` to isolate the transport.
+populate. If empty: check the entitlement / Web Inspector toggle, or read the
+transport modules (`src/usbmux.ts`, `src/sim.ts`) directly with `INSPECT_WEBKIT_DEBUG=1`.
 
 ---
 
@@ -417,7 +396,7 @@ Agents can work on these in parallel without stepping on each other:
 
 | Area                       | Files                       | Owner-of-record for tests          |
 | -------------------------- | --------------------------- | ---------------------------------- |
-| **Transport**              | `src/usbmux.ts`, `src/lockdown.ts`, `src/sim.ts`, `src/webinspector.ts` | L2 smokes |
+| **Transport**              | `src/usbmux.ts`, `src/lockdown.ts`, `src/sim.ts`, `src/webinspector.ts` | L3 probe (against a real sim) |
 | **CDP translation**        | `src/cdp/ios-protocol.ts`, `src/cdp/target.ts` | L3 `cdp-domains.ts`     |
 | **Server / discovery**     | `src/cdp/server.ts`, `src/index.ts`, `bin/cli.ts` | `curl /json/list`, L3 probe |
 | **Parsers**                | `src/plist.ts`, `src/stream.ts`                | L1 `bun test`           |

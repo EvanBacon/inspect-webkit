@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // inspect-webkit CLI — bridge iOS Safari / WKWebView debug targets to the
 // Chrome DevTools Protocol.
 

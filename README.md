@@ -230,18 +230,12 @@ scripts/e2e/       L3 protocol probes (see docs/e2e-verification.md)
 
 ## Tests
 
-Four-layer ladder, fast at the bottom; see
-[`docs/e2e-verification.md`](docs/e2e-verification.md) for the full
-guide.
+Two layers; see [`docs/e2e-verification.md`](docs/e2e-verification.md) for
+the full guide.
 
 ```bash
 # L1 — unit tests (parsers, framing)
 bun test
-
-# L2 — transport smokes (usbmux, simulator socket)
-bun src/usbmux.smoke.ts
-SOCK=$(lsof -U | awk '/com\.apple\.webinspectord_sim\.socket/&&/webinspec/{print $NF;exit}')
-bun src/sim.smoke.ts "$SOCK"
 
 # L3 — CDP↔WIR translation (boot a sim, then)
 inspect-webkit cdp --port 9222 &

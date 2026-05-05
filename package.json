@@ -3,26 +3,27 @@
   "version": "0.0.0",
   "description": "Headlessly list debuggable Safari / WKWebView targets across iOS devices and Simulators, and bridge them to Chrome DevTools Protocol. Pure Bun/TypeScript.",
   "type": "module",
-  "main": "src/index.ts",
-  "module": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "bin": {
-    "inspect-webkit": "./bin/cli.ts"
+    "inspect-webkit": "./dist/cli.js"
   },
   "files": [
-    "src",
-    "bin",
+    "dist",
     "README.md",
-    "LICENSE",
-    "!**/__tests__",
-    "!**/*.test.ts",
-    "!**/*.smoke.ts"
+    "LICENSE"
   ],
   "scripts": {
     "cdp": "bun bin/cli.ts cdp",
+    "build": "rm -rf dist && bun build bin/cli.ts --target=node --outfile dist/cli.js && bun build src/index.ts --target=node --outfile dist/index.js && tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run build",
     "test": "bun test"
   },
   "keywords": [
@@ -52,14 +53,13 @@
   "bugs": {
     "url": "https://github.com/EvanBacon/inspect-webkit/issues"
   },
-  "dependencies": {
-    "commander": "^14.0.3",
-    "ws": "^8.18.0"
-  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^22.0.0",
-    "@types/ws": "^8.5.13"
+    "@types/ws": "^8.5.13",
+    "commander": "^14.0.3",
+    "typescript": "^5",
+    "ws": "^8.18.0"
   },
   "peerDependencies": {
     "typescript": "^5"
