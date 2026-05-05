@@ -129,12 +129,21 @@ function wirCookieToCdp(c: any) {
 }
 
 export function installNetworkFilters(t: Target, ioCache?: IoCache) {
-  // Track requestId → {url, frameId} from requestWillBeSent so we can
-  // satisfy Network.getResponseBody by re-fetching via Network.loadResource.
-  // Safari's forward socket doesn't carry response bodies; this is the
-  // closest workable fallback. Cap the map at 1k entries to bound memory.
-  const requestUrls = new Map<string, { url: string; frameId?: string }>();
+  // Track requestId → {url, method, headers, frameId} from requestWillBeSent
+  // so we can satisfy Network.getResponseBody by re-fetching the URL ourselves.
+  // Safari's forward socket doesn't carry response bodies. We previously
+  // re-fetched via WIR Network.loadResource, but that returns content as a
+  // plain JSON string — binary bytes get mangled by UTF-8 round-tripping
+  // (DevTools' Preview pane showed glitched JPEGs and replacement-char
+  // soup for AVIF/woff). Doing the re-fetch from the bridge process with
+  // Node fetch preserves bytes exactly. Cap map at 1k entries to bound memory.
+  const requestUrls = new Map<
+    string,
+    { url: string; method?: string; headers?: Record<string, string>; frameId?: string }
+  >();
   const REQUEST_LIMIT = 1024;
+  // Cap re-fetched response size to avoid OOM on huge assets.
+  const REFETCH_MAX_BYTES = 16 * 1024 * 1024;
   // --- Pure renames -------------------------------------------------------
   for (const [from, to] of Object.entries(TOOLS_RENAMES)) {
     t.addMessageFilter(`tools::${from}`, (msg) => {
@@ -261,12 +270,15 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
     swallowWith(t, msg, {}),
   );
   // Network.getResponseBody — Safari doesn't deliver response bodies on
-  // the inspector socket. Fall back to Network.loadResource (a separate
-  // fetch from Safari's perspective, replaying GET semantics) using the
-  // URL we tracked in requestWillBeSent. This is what makes the Network
-  // panel's Preview / Response tabs render: without it, DevTools shows
-  // a spinning placeholder forever. The fallback misses POST bodies and
-  // server-set caching headers, but covers the common GET case.
+  // the inspector socket. We re-fetch the tracked URL from the bridge
+  // process (Node fetch) and base64-encode binary bodies. This is what
+  // makes the Network panel's Preview / Response tabs render — without
+  // it DevTools shows a spinning placeholder forever.
+  //
+  // Caveats: this is a fresh request, not a replay of the original. POST
+  // bodies aren't recoverable; cookie/auth state is best-effort (we forward
+  // the request headers we observed, including any Cookie header). Server
+  // 304/redirect handling differs from the original navigation.
   t.addMessageFilter("tools::Network.getResponseBody", async (msg) => {
     const requestId = msg.params?.requestId;
     const known = typeof requestId === "string" ? requestUrls.get(requestId) : undefined;
@@ -276,36 +288,39 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
       });
       return null;
     }
-    try {
-      const r = await t.callTarget("Network.loadResource", {
-        frameId: known.frameId,
-        url: known.url,
+    if (known.method && known.method.toUpperCase() !== "GET") {
+      t.fireErrorToTools(msg.id!, {
+        message: `Network.getResponseBody: cannot recover ${known.method} response body (bridge re-fetch is GET-only)`,
       });
-      const content = String(r?.content ?? "");
-      const mimeType = String(r?.mimeType ?? "");
-      // WIR's Network.loadResource already base64-encodes binary bodies and
-      // sets `base64Encoded: true` on the result. Re-encoding that with
-      // Buffer.from(..., "binary") corrupts the bytes and DevTools renders a
-      // broken image / font preview. Trust the flag when present; otherwise
-      // fall back to a mime-type heuristic. SVG and most font MIME types are
-      // text-shaped and should pass through unchanged.
-      const isText = /^(text\/|image\/svg\+xml|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded|font-woff))/.test(mimeType);
-      let body: string;
-      let base64Encoded: boolean;
-      if (r?.base64Encoded === true) {
-        body = content;
-        base64Encoded = true;
-      } else if (isText) {
-        body = content;
-        base64Encoded = false;
-      } else {
-        body = Buffer.from(content, "binary").toString("base64");
-        base64Encoded = true;
+      return null;
+    }
+    try {
+      // Forward the original request headers so cookie/auth-gated assets
+      // come back with the same body. Drop hop-by-hop and conditional
+      // headers — we want the full body, not a 304.
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(known.headers ?? {})) {
+        const lk = k.toLowerCase();
+        if (lk === "if-none-match" || lk === "if-modified-since" || lk === "host" || lk === "connection") continue;
+        headers[k] = String(v);
       }
-      t.fireResultToTools(msg.id!, { body, base64Encoded });
+      const res = await fetch(known.url, { headers, redirect: "follow" });
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > REFETCH_MAX_BYTES) {
+        t.fireErrorToTools(msg.id!, {
+          message: `Network.getResponseBody: response too large (${buf.byteLength} bytes > ${REFETCH_MAX_BYTES})`,
+        });
+        return null;
+      }
+      const mimeType = ((res.headers.get("content-type") ?? "").split(";")[0] ?? "").trim();
+      // Text-shaped MIMEs that round-trip cleanly as UTF-8. Everything else
+      // (images, fonts, video, octet-stream, …) goes back as base64.
+      const isText = /^(text\/|image\/svg\+xml|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded))$/.test(mimeType);
+      const body = isText ? buf.toString("utf8") : buf.toString("base64");
+      t.fireResultToTools(msg.id!, { body, base64Encoded: !isText });
     } catch (e: any) {
       t.fireErrorToTools(msg.id!, {
-        message: `Network.getResponseBody fallback (loadResource) failed: ${e?.message ?? String(e)}`,
+        message: `Network.getResponseBody re-fetch failed: ${e?.message ?? String(e)}`,
       });
     }
     return null;
@@ -335,7 +350,12 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
           const k = requestUrls.keys().next().value;
           if (k !== undefined) requestUrls.delete(k);
         }
-        requestUrls.set(p.requestId, { url: p.request.url, frameId: p.frameId });
+        requestUrls.set(p.requestId, {
+          url: p.request.url,
+          method: p.request.method,
+          headers: p.request.headers,
+          frameId: p.frameId,
+        });
       }
     }
     return Promise.resolve(msg);
