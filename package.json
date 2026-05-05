@@ -16,11 +16,12 @@
     "src",
     "bin",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "!**/__tests__",
+    "!**/*.test.ts",
+    "!**/*.smoke.ts"
   ],
   "scripts": {
-    "list": "bun bin/cli.ts list",
-    "devices": "bun bin/cli.ts devices",
     "cdp": "bun bin/cli.ts cdp",
     "test": "bun test"
   },
@@ -52,6 +53,7 @@
     "url": "https://github.com/EvanBacon/inspect-webkit/issues"
   },
   "dependencies": {
+    "commander": "^14.0.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mapConsoleType } from "./console-log";
+import { mapConsoleType } from "../console-log";
 
 // Safari emits "warning" (its native level for console.warn) — earlier the
 // switch only matched "warn", so warnings fell through to "log" and the

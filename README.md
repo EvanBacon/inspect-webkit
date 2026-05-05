@@ -23,12 +23,7 @@ No native dependencies. Pure Bun/TypeScript end-to-end.
 ## CLI
 
 ```bash
-inspect-webkit devices           # list paired iOS devices over USB
-inspect-webkit list              # all debuggable pages, formatted
-inspect-webkit list --json       # same, machine-readable
-inspect-webkit list --watch      # poll and reprint on change
 inspect-webkit cdp [--port 9222] # CDP bridge: debug iOS pages from Chrome / VS Code
-inspect-webkit bun <ws://...>    # CDP bridge for a Bun --inspect socket
 ```
 
 From a checkout, replace `inspect-webkit` with `bun bin/cli.ts`.
@@ -36,25 +31,13 @@ From a checkout, replace `inspect-webkit` with `bun bin/cli.ts`.
 ## API
 
 ```ts
-import {
-  listTargets,
-  listDevices,
-  startCdpServer,
-  startBunCdpServer,
-} from "inspect-webkit";
+import { listTargets, startCdpServer } from "inspect-webkit";
 
 const targets = await listTargets();          // device + simulator pages
-const devices = await listDevices();          // paired USB devices
 
 const server = await startCdpServer({ port: 9222 });
 // ... later
 server.stop();
-
-// or bridge a Bun --inspect socket:
-const bunBridge = await startBunCdpServer({
-  port: 9223,
-  upstreams: [{ url: "ws://127.0.0.1:6499/abc" }],
-});
 ```
 
 ### CDP bridge — debug iOS pages with Chrome DevTools or VS Code
@@ -156,35 +139,6 @@ What doesn't (Safari-side gaps, not bridge bugs):
 
 Set `INSPECT_WEBKIT_DEBUG=1` to log every CDP frame in either direction.
 
-### Bun `--inspect` bridge
-
-Bun's JS engine is JavaScriptCore, the same engine Safari uses, so it speaks
-the same WebKit Inspector protocol. The translation layer above works on
-Bun unchanged — only the transport differs (one plain WebSocket per Bun
-process, no usbmux / lockdown / WIR multiplex). Drop the iOS plumbing,
-keep `src/cdp/domains/*.ts`, point it at Bun's socket.
-
-```bash
-# 1. start a Bun script under the inspector (pick any path on the URL)
-bun --inspect=ws://127.0.0.1:6499/x your-script.ts
-
-# 2. start the CDP bridge against that socket
-inspect-webkit bun ws://127.0.0.1:6499/x   # listens on :9223 by default
-
-# 3. attach: chrome://inspect → "Configure" → localhost:9223
-```
-
-Multiple Bun processes can be bridged from one `inspect-webkit bun` server
-by passing several `ws://…` URLs, each becomes a separate target in
-`/json/list`. Useful surface is `Runtime`, `Debugger`, `Console/Log`, and
-`IO` — `DOM`/`Page`/`CSS`/`Network` filters are present but mostly inert
-since Bun has no DOM. Bun's inspector accepts only one upstream client at
-a time, so don't expect to drive two DevTools sessions against the same
-process.
-
-The known `Debugger.paused` issue from the iOS bridge applies here too,
-since it's a translator-side bug rather than transport-specific.
-
 #### Verification
 
 The bridge ships with layered e2e probes under `scripts/e2e/` —
@@ -193,19 +147,11 @@ The bridge ships with layered e2e probes under `scripts/e2e/` —
 kick). See [`docs/e2e-verification.md`](docs/e2e-verification.md) for the
 L1–L4 ladder and the OK/ERR baseline.
 
-Example:
+Example — list every debuggable target:
 
 ```
-$ inspect-webkit list
-# device:00008140
-  [Safari com.apple.mobilesafari]
-  d/PID:12769/1                  Evan Bacon
-                                 https://evanbacon.dev/
-
-# sim:66736
-  [Safari com.apple.mobilesafari]
-  s/PID:99666/1                  Apple
-                                 https://www.apple.com/
+$ inspect-webkit cdp &
+$ curl -s http://localhost:9222/json/list | jq '.[] | {title, url, webSocketDebuggerUrl}'
 ```
 
 Set `INSPECT_WEBKIT_DEBUG=1` to trace the lockdown / TLS / RPC handshake.
@@ -269,7 +215,6 @@ src/
   sim.ts           lsof-based discovery of webinspectord_sim sockets
   cdp/
     server.ts      Bun.serve HTTP+WS on :9222; /json/list, /devtools/page/<id>
-    bun-server.ts  same surface on :9223 for Bun --inspect upstreams
     target.ts      per-session class — wraps WIR forwardSocket; handles
                    target-based mode (Target.{send,dispatch}MessageFromTarget,
                    didCommitProvisionalTarget on cross-origin nav)
@@ -279,10 +224,7 @@ src/
                    plus cdp-only-stubs.ts — ack-stubs ~80 commands that
                    iOS 26 doesn't implement, to prevent wedging the inner
                    page target during DevTools' attach barrage
-  bun/
-    source.ts      WebSocket adapter to Bun's JSC inspector — implements
-                   the wi-shaped surface Target calls (forwardSocketData)
-bin/cli.ts         CLI: devices / list / cdp / bun
+bin/cli.ts         CLI: cdp
 scripts/e2e/       L3 protocol probes (see docs/e2e-verification.md)
 ```
 

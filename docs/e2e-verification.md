@@ -59,14 +59,11 @@ JSON-RPC over a WebSocket. Fast, deterministic, scriptable.
 # 1. Boot a sim and open a known page
 scripts/e2e/sim-boot.sh https://example.com/
 
-# 2. Confirm the bridge sees it
-bun bin/cli.ts list
-
-# 3. Start the bridge and block until ready (no blind sleep)
+# 2. Start the bridge and block until ready (no blind sleep)
 bun bin/cli.ts cdp --port 9222 &
 scripts/e2e/wait-ready.sh 9222
 
-# 4. Pick a target ws URL
+# 3. Confirm the bridge sees the page and grab its ws URL
 WS=$(curl -s http://localhost:9222/json/list | jq -r '.[0].webSocketDebuggerUrl')
 echo "$WS"
 ```
@@ -407,10 +404,9 @@ Pre-flight (do this once per device, then forget it):
 - Settings → Safari → Advanced → Web Inspector → ON
 - For a WKWebView host app on iOS 16.4+: app sets `webView.isInspectable = true`
 
-Then `bun bin/cli.ts devices` and `bun bin/cli.ts list` should populate. If
-`devices` is empty: usbmuxd or pairing problem (L2). If `devices` has the
-device but `list` is empty: the entitlement / Web Inspector toggle (not
-something we can fix in code).
+Then `curl http://localhost:9222/json/list` (after `bun bin/cli.ts cdp`) should
+populate. If empty: check the entitlement / Web Inspector toggle, or run the
+L2 smokes against `src/usbmux.ts` / `src/sim.ts` to isolate the transport.
 
 ---
 
@@ -456,7 +452,7 @@ Agents can work on these in parallel without stepping on each other:
   `Runtime.enable`, the most likely cause is a second client (another
   agent, a stale Chrome tab, VS Code's debugger) already attached.
 - **Repeated dual-attach can wedge `webinspectord_sim`.** Symptom:
-  `bun bin/cli.ts list` returns empty for minutes even after restarting the
+  `/json/list` returns empty for minutes even after restarting the
   bridge, even though Safari clearly has pages open. Recovery:
   `xcrun simctl shutdown booted && xcrun simctl boot <udid>`. Avoid
   attaching twice in the first place.

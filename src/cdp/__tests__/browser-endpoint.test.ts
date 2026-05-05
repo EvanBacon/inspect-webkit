@@ -12,7 +12,7 @@ import {
   attachBrowserWs,
   type BrowserEntry,
   type PageSessionHandle,
-} from "./browser-endpoint";
+} from "../browser-endpoint";
 
 type Frame = Record<string, any>;
 
