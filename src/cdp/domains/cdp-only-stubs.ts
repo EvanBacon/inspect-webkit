@@ -61,8 +61,10 @@ const CDP_ONLY_DOMAINS = [
 // that Safari doesn't recognize, where forwarding has caused observable
 // problems.
 const CDP_ONLY_METHODS: Record<string, any> = {
-  "Inspector.enable": {},
-  "Inspector.disable": {},
+  // Inspector.enable / disable exist in WIR too and MUST be forwarded —
+  // WebKit only dispatches `Inspector.inspect` (the click-to-inspect event)
+  // after the backend agent has been enabled. Stubbing it locally silently
+  // breaks the Elements panel's "select an element" feature.
 
   "Network.setAttachDebugStack": {},
   // chrome-devtools-frontend's NetworkManager reads response.ruleIds.length
