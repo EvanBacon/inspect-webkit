@@ -145,8 +145,16 @@ export function listen(server: http.Server, host: string, port: number): Promise
 }
 
 export function logCdpServerBanner(opts: { brand: string; host: string; port: number }): void {
-  console.error(`# ${opts.brand} CDP bridge listening on http://${opts.host}:${opts.port}`);
-  console.error(`#   targets:    http://${opts.host}:${opts.port}/json/list`);
-  console.error(`#   chrome:     chrome://inspect → "Configure" → ${opts.host}:${opts.port}`);
-  console.error(`#   vscode:     attach config "type":"chrome","port":${opts.port}`);
+  const useColor =
+    !process.env.NO_COLOR && (process.stderr as { isTTY?: boolean }).isTTY === true;
+  const c = (code: string, s: string) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
+  const bold = (s: string) => c("1", s);
+  const dim = (s: string) => c("2", s);
+  const cyan = (s: string) => c("36", s);
+  const green = (s: string) => c("32", s);
+
+  const url = `http://${opts.host}:${opts.port}`;
+  console.error(`${green("●")} ${bold(`${opts.brand} CDP`)} ${cyan(url)}`);
+  console.error(`  ${dim("chrome")}  chrome://inspect → ${opts.host}:${opts.port}`);
+  console.error(`  ${dim("vscode")}  "type": "chrome", "port": ${opts.port}`);
 }
