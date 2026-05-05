@@ -283,11 +283,26 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
       });
       const content = String(r?.content ?? "");
       const mimeType = String(r?.mimeType ?? "");
-      // CDP returns base64Encoded:true for binary types so DevTools knows
-      // not to try to render it as text.
-      const isText = /^(text\/|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded))/.test(mimeType);
-      const data = isText ? content : Buffer.from(content, "binary").toString("base64");
-      t.fireResultToTools(msg.id!, { body: data, base64Encoded: !isText });
+      // WIR's Network.loadResource already base64-encodes binary bodies and
+      // sets `base64Encoded: true` on the result. Re-encoding that with
+      // Buffer.from(..., "binary") corrupts the bytes and DevTools renders a
+      // broken image / font preview. Trust the flag when present; otherwise
+      // fall back to a mime-type heuristic. SVG and most font MIME types are
+      // text-shaped and should pass through unchanged.
+      const isText = /^(text\/|image\/svg\+xml|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded|font-woff))/.test(mimeType);
+      let body: string;
+      let base64Encoded: boolean;
+      if (r?.base64Encoded === true) {
+        body = content;
+        base64Encoded = true;
+      } else if (isText) {
+        body = content;
+        base64Encoded = false;
+      } else {
+        body = Buffer.from(content, "binary").toString("base64");
+        base64Encoded = true;
+      }
+      t.fireResultToTools(msg.id!, { body, base64Encoded });
     } catch (e: any) {
       t.fireErrorToTools(msg.id!, {
         message: `Network.getResponseBody fallback (loadResource) failed: ${e?.message ?? String(e)}`,
