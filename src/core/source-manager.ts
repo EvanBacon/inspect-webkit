@@ -210,12 +210,9 @@ export class SourceManager {
       await Promise.race([Promise.all(this.opts.discoveries.map((d) => d.ready)), timeout]);
       while (!this.stopped && left() > 0) {
         if (![...this.entries.values()].some((e) => e.state === "connecting")) return;
-        await Promise.race([new Promise<void>((r) => {
-          const off = this.onChange(() => {
-            off();
-            r();
-          });
-        }), timeout]);
+        let off = () => {};
+        await Promise.race([new Promise<void>((r) => (off = this.onChange(() => r()))), timeout]);
+        off();
       }
     } finally {
       clearTimeout(timer);
@@ -307,6 +304,7 @@ export class SourceManager {
     // Our connection must never keep a host process alive on its own (the
     // HTTP server does that for the CLI; library callers may want to exit).
     conn.wi.unref();
+    conn.lockdown?.unref();
 
     // Wait for the daemon's first reply. While webinspectord_sim sits in
     // launchd's respawn throttle this takes up to ~10 s; that is "still

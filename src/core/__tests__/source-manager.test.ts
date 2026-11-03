@@ -238,3 +238,11 @@ test("stop() closes connections, aborts pending opens and stops discovery", asyn
   expect(disc.stopped).toBe(true);
   expect(m.readySources()).toEqual([]);
 });
+
+test("settled() does not leak change listeners when it times out", async () => {
+  const s = simDesc("KKKK", () => makeFakeDaemon({ silent: true }));
+  const m = manager([new FakeDiscovery([s.desc])], { firstReplyTimeoutMs: 10_000 });
+  m.start();
+  for (let i = 0; i < 5; i++) await m.settled(20);
+  expect((m as any).changeHandlers.size).toBe(0);
+});

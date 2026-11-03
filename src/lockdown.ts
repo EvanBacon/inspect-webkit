@@ -215,6 +215,13 @@ export class LockdownClient {
     return { socket: upgraded.socket, stream: upgraded.stream };
   }
 
+  /** Don't let this connection alone keep the process alive. */
+  unref() {
+    try {
+      this.socket.unref();
+    } catch {}
+  }
+
   close() {
     try {
       this.socket.end();
