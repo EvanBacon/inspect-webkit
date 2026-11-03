@@ -172,3 +172,14 @@ test("an exception from the shim evaluate, or another native error, is reported"
   expect((await reply(r2, 1)).error.message).toMatch(/Cannot navigate/);
   expect(r2.toTarget.some((x) => x.method === "Runtime.evaluate")).toBe(false);
 });
+
+test("an unrelated 'was not found' error does not switch the session to the shim (review)", async () => {
+  const r = rig();
+  await mainFrame(r);
+  nav(r, 1, { url: "https://a.test/" });
+  await r.t.onMessageFromTarget(JSON.stringify({ id: (await sentTo(r, "Page.navigate")).id, error: { code: -32000, message: "Frame was not found" } }));
+  expect((await reply(r, 1)).error.message).toMatch(/Frame was not found/);
+  nav(r, 2, { url: "https://a.test/" });
+  await sentTo(r, "Page.navigate", 1);
+  expect(r.toTarget.some((x) => x.method === "Runtime.evaluate")).toBe(false);
+});

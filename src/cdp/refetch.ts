@@ -118,18 +118,29 @@ function parseV6(s: string): number[] | null {
 
 const v4Of = (hi: number, lo: number) => [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff];
 
-export function classifyAddress(ip: string): AddressKind {
+/** One spelling per address: brackets and zone stripped, IPv4-mapped IPv6
+ *  (::ffff:a.b.c.d, any notation) unwrapped to dotted IPv4. */
+export function canonicalAddress(ip: string): string {
   const s = ip.replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+  if (parseV4(s)) return s;
+  const w = parseV6(s);
+  if (w && w.slice(0, 5).every((x) => x === 0) && w[5] === 0xffff) return v4Of(w[6]!, w[7]!).join(".");
+  return s.toLowerCase();
+}
+
+export function classifyAddress(ip: string): AddressKind {
+  const s = canonicalAddress(ip);
   const v4 = parseV4(s);
   if (v4) return classifyV4(v4);
   const w = parseV6(s);
   if (!w) return "reserved";
-  const zeroUpTo = (n: number) => w.slice(0, n).every((x) => x === 0);
-  if (zeroUpTo(8)) return "reserved"; // ::
-  if (zeroUpTo(7) && w[7] === 1) return "loopback"; // ::1
-  // Embedded IPv4: mapped ::ffff:0:0/96, compatible ::/96, NAT64 64:ff9b::/96.
-  if (zeroUpTo(5) && (w[5] === 0xffff || w[5] === 0)) return classifyV4(v4Of(w[6]!, w[7]!));
-  if (w[0] === 0x64 && w[1] === 0xff9b) return w[2] === 0 && w[3] === 0 && w[4] === 0 && w[5] === 0 ? classifyV4(v4Of(w[6]!, w[7]!)) : "private";
+  const zero = (from: number, to: number) => w.slice(from, to).every((x) => x === 0);
+  if (zero(0, 7) && w[7] === 1) return "loopback"; // ::1
+  // NAT64 (inside ::/8, so first): classify the embedded IPv4; the
+  // local-use 64:ff9b:1::/48 is private.
+  if (w[0] === 0x64 && w[1] === 0xff9b) return zero(2, 6) ? classifyV4(v4Of(w[6]!, w[7]!)) : "private";
+  // Everything else in ::/8 (::, IPv4-compatible, SIIT ::ffff:0:a.b.c.d, …).
+  if (w[0]! <= 0xff) return "reserved";
   if (w[0] === 0x2002) return classifyV4(v4Of(w[1]!, w[2]!)); // 6to4
   const top = w[0]!;
   if ((top & 0xffc0) === 0xfe80) return "link-local"; // fe80::/10
@@ -137,11 +148,13 @@ export function classifyAddress(ip: string): AddressKind {
   if ((top & 0xfe00) === 0xfc00) return "private"; // unique local fc00::/7
   if ((top & 0xff00) === 0xff00) return "reserved"; // multicast
   if (top === 0x2001 && (w[1] === 0xdb8 || w[1] === 0)) return "reserved"; // documentation, Teredo
-  if (top === 0x100 && zeroUpTo(4)) return "reserved"; // discard-only 100::/64
+  if (top === 0x3fff && w[1]! < 0x1000) return "reserved"; // documentation 3fff::/20
+  if (top === 0x100 && zero(1, 4)) return "reserved"; // discard-only 100::/64
   return "public";
 }
 
-const isUnspecified = (ip: string) => /^(0\.0\.0\.0|::|0:0:0:0:0:0:0:0)$/.test(ip);
+/** Addresses that reach this machine regardless of interface: ::, 0/8. */
+const isUnspecified = (canon: string) => canon === "::" || canon === "0:0:0:0:0:0:0:0" || /^0\./.test(canon);
 
 // ---------- headers ----------
 
@@ -228,10 +241,11 @@ async function resolveChecked(url: URL, o: RefetchOptions, deps: RefetchDeps, si
   const fam = isIP(host);
   const addrs = fam ? [{ address: host, family: fam }] : await abortable(deps.lookup(host), signal);
   if (addrs.length === 0) throw new RefetchError(`${host} did not resolve`);
-  const local = new Set(deps.localAddresses().map((a) => a.replace(/%.*$/, "")));
+  const local = new Set(deps.localAddresses().map(canonicalAddress));
   for (const { address } of addrs) {
-    const kind = classifyAddress(address);
-    const onThisMachine = kind === "loopback" || isUnspecified(address) || local.has(address.replace(/%.*$/, ""));
+    const canon = canonicalAddress(address);
+    const kind = classifyAddress(canon);
+    const onThisMachine = kind === "loopback" || isUnspecified(canon) || local.has(canon);
     if (onThisMachine && o.bridgePorts.includes(port)) {
       throw new RefetchError(`refused: ${host}:${port} is this bridge's own port`);
     }

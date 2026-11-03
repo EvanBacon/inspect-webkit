@@ -272,3 +272,18 @@ describe("XML encoder", () => {
     expect(back.slice(1)).toEqual([Infinity, -Infinity, 1e300, 2 ** 60]);
   });
 });
+
+describe("review follow-ups", () => {
+  test("<real> parsing is linear: a long non-matching digit run fails fast", () => {
+    const src = `<plist><real>${"1".repeat(200_000)}x</real></plist>`;
+    expectPlistError(() => decodeXml(src));
+    for (const ok of ["1", ".5", "1.", "1.5e3", "-2E-3", "+7"]) {
+      expect(decodeXml(`<plist><real>${ok}</real></plist>`)).toBe(Number(ok));
+    }
+  });
+
+  test("<date> must be UTC (trailing Z), like CF", () => {
+    expectPlistError(() => decodeXml("<plist><date>2020-01-01T00:00:00</date></plist>"));
+    expect((decodeXml("<plist><date>2020-01-01T00:00:00Z</date></plist>") as Date).getTime()).toBe(Date.UTC(2020, 0, 1));
+  });
+});

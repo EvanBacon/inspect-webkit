@@ -76,6 +76,12 @@ describe("classifyAddress", () => {
     ["ff02::1", "reserved"],
     ["255.255.255.255", "reserved"],
     ["not-an-ip", "reserved"],
+    // review follow-ups
+    ["100::1", "reserved"],
+    ["::ffff:0:7f00:1", "reserved"],
+    ["::1:0:0:1", "reserved"],
+    ["3fff::1", "reserved"],
+    ["::ffff:0:0", "reserved"],
   ];
   for (const [ip, want] of cases) {
     test(`${ip} → ${want}`, () => expect(classifyAddress(ip)).toBe(want as any));
@@ -128,6 +134,15 @@ describe("refetch policy", () => {
     await expect(refetch("http://[::1]:9222/", any, deps)).rejects.toThrow(/bridge/);
     await expect(refetch("http://far.test:9222/x", any, deps)).resolves.toBeDefined();
     expect(calls.map((c) => c.url)).toEqual(["http://localhost:8081/bundle.js", "http://far.test:9222/x"]);
+  });
+
+  test('"any": IPv4-mapped spellings of this machine are still the bridge (review)', async () => {
+    const { deps, calls } = fakeDeps({ "mapped.test": ["::ffff:192.168.1.20"] });
+    const any = base({ policy: "any" });
+    for (const u of ["http://[::ffff:0.0.0.0]:9222/json", "http://[::ffff:127.0.0.1]:9222/", "http://[::ffff:192.168.1.20]:9222/", "http://mapped.test:9222/", "http://0.1.2.3:9222/"]) {
+      await expect(refetch(u, any, deps)).rejects.toThrow(/bridge/);
+    }
+    expect(calls).toHaveLength(0);
   });
 
   test('"off" never fetches', async () => {

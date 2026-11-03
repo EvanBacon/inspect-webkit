@@ -13,7 +13,7 @@ const UNKNOWN_FRAME_ID = "main";
 
 function isMethodNotFound(e: unknown): boolean {
   const err = e as { code?: number; message?: string };
-  return err?.code === -32601 || /was not found/.test(err?.message ?? "");
+  return err?.code === -32601 || /'Page\.navigate' was not found/.test(err?.message ?? "");
 }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));

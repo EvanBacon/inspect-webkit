@@ -278,7 +278,7 @@ class XmlDecoder {
       case "date": {
         const s = this.text("date").trim();
         const d = new Date(s);
-        if (!/^\d{4}-\d\d-\d\dT/.test(s) || Number.isNaN(d.getTime())) fail(`invalid <date> ${JSON.stringify(s.slice(0, 40))}`);
+        if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(s) || Number.isNaN(d.getTime())) fail(`invalid <date> ${JSON.stringify(s.slice(0, 40))}`);
         return d;
       }
       case "array": {
@@ -353,7 +353,8 @@ function parseXmlReal(t: string): number {
   if (lower === "nan" || lower === "+nan" || lower === "-nan") return NaN;
   if (/^\+?inf(inity)?$/.test(lower)) return Infinity;
   if (/^-inf(inity)?$/.test(lower)) return -Infinity;
-  if (!/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/.test(lower)) fail(`invalid <real> ${JSON.stringify(t.slice(0, 40))}`);
+  // Unambiguous (linear-time) grammar: no two quantifiers can split the same digits.
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/.test(lower)) fail(`invalid <real> ${JSON.stringify(t.slice(0, 40))}`);
   return Number(t);
 }
 
