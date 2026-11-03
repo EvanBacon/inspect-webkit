@@ -29,6 +29,8 @@ export type FakeSource = {
   push(selector: string, argument: Record<string, PlistValue>): void;
   /** Push raw bytes (already framed or not). */
   pushRaw(bytes: Uint8Array): void;
+  /** Forget recorded writes (long-lived sources would otherwise grow forever). */
+  trim(): void;
   close(): void;
 };
 
@@ -53,6 +55,9 @@ export function makeFakeSource(id = "sim:fuzz"): FakeSource {
     },
     pushRaw(bytes) {
       sock.feed(bytes);
+    },
+    trim() {
+      sock.writes.length = 0;
     },
     close() {
       sock.destroy();

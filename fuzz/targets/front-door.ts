@@ -32,7 +32,7 @@ const CAN_UPGRADE = !process.versions.bun;
 const PAGE = "sim:fuzz:PID:1:1";
 const ALLOWED_ORIGIN = "http://ok.example:3000";
 
-type Server = { rig: ServerRig; allowOrigins: string[]; browserPath: string };
+type Server = { rig: ServerRig; allowOrigins: string[]; browserPath: string; trim: () => void };
 let serversP: Promise<Server[]> | null = null;
 
 async function servers(): Promise<Server[]> {
@@ -49,7 +49,7 @@ async function servers(): Promise<Server[]> {
     });
     await settle(5);
     const v = JSON.parse(rig.get("/json/version").body);
-    return { rig, allowOrigins: opts.allowOrigins ?? [], browserPath: new URL(v.webSocketDebuggerUrl).pathname };
+    return { rig, allowOrigins: opts.allowOrigins ?? [], browserPath: new URL(v.webSocketDebuggerUrl).pathname, trim: () => src.trim() };
   };
   return [await mk({}), await mk({ host: "0.0.0.0", allowOrigins: [ALLOWED_ORIGIN] }), await mk({ host: "192.168.1.91" })];
 }
@@ -151,6 +151,7 @@ function originRejected(origin: string | undefined, allowed: string[]): boolean 
 
 async function run(data: Uint8Array): Promise<void> {
   const all = await (serversP ??= servers());
+  for (const s of all) s.trim();
   const reqs = parse(data);
   for (const [i, r] of reqs.entries()) {
     const s = all[(data[0] ?? 0) % 3 === 0 ? i % 3 : (data[0] ?? 0) % 3]!;
@@ -159,7 +160,7 @@ async function run(data: Uint8Array): Promise<void> {
     if (r.kind === "G") {
       const res = s.rig.get(r.path, headers, r.method);
       if (rebinding(headers.host)) check(res.status === 403, `Host ${JSON.stringify(headers.host)} answered ${res.status}`);
-      if (res.status === 200 && /^\/json/.test(r.path)) {
+      if (res.status === 200 && String(res.headers["content-type"] ?? "").startsWith("application/json")) {
         const body = JSON.parse(res.body);
         const urls = JSON.stringify(body).match(/(ws|devtools):\/\/[^"]*/g) ?? [];
         for (const u of urls) check(!/[\s<>]|\\"/.test(u), `reflected URL is unsafe: ${u.slice(0, 80)}`);
