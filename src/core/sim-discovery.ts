@@ -11,7 +11,9 @@
 //     no process spawn. It's only the change trigger.
 //   - When the socket set changes (a boot creates a new launchd dir), when
 //     a source drops (refresh()), and as a slow safety net, map sockets to
-//     UDIDs with `xcrun simctl list devices booted -j` +
+//     UDIDs: booted simulators come from CoreSimulator's device.plist files
+//     (a few ms; `xcrun simctl list devices booted -j` if that finds none,
+//     and always for the safety rescan), and each one's socket from
 //     `xcrun simctl getenv <udid> RWI_LISTEN_SOCKET` (the env var launchd_sim
 //     sets for webinspectord_sim). Ids are then "sim:<UDID>", stable across
 //     webinspectord restarts and reboots.
@@ -22,6 +24,9 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { decode } from "../plist";
 import { connectSimulator } from "../sim";
 import { WebInspectorClient } from "../webinspector";
 import type { SourceDescriptor, SourceDiscovery } from "./source-manager";
@@ -34,7 +39,9 @@ export type BootedSimulator = { udid: string; name: string };
 export type SimDiscoveryDeps = {
   /** Candidate socket paths (live and stale). Must be cheap. */
   scanSockets(): string[];
-  listBooted(): Promise<BootedSimulator[]>;
+  /** Booted simulators. `authoritative` asks simctl rather than a cheaper
+   *  source that might be stale. */
+  listBooted(authoritative?: boolean): Promise<BootedSimulator[]>;
   /** webinspectord_sim socket path of a booted simulator, or null. */
   socketFor(udid: string): Promise<string | null>;
   /** Fallback: live sockets according to lsof. */
@@ -101,6 +108,39 @@ export function parseLsofSockets(out: string): Array<{ socketPath: string; pid: 
   return Array.from(sockets, ([socketPath, pid]) => ({ socketPath, pid }));
 }
 
+/** Default CoreSimulator device set. */
+const DEVICE_SET = `${homedir()}/Library/Developer/CoreSimulator/Devices`;
+/** CoreSimulator's SimDeviceState.booted */
+const STATE_BOOTED = 3;
+
+/** Booted simulators according to the device set's device.plist files.
+ *  Never throws; unreadable entries are skipped. */
+export async function readBootedFromDeviceSet(dir = DEVICE_SET): Promise<BootedSimulator[]> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const rows = await Promise.all(
+    names.map(async (n) => {
+      try {
+        const v = decode(new Uint8Array(await readFile(`${dir}/${n}/device.plist`))) as any;
+        if (!v || typeof v !== "object" || typeof v.UDID !== "string") return null;
+        if (Number(v.state) !== STATE_BOOTED || v.isDeleted === true) return null;
+        return { udid: v.UDID as string, name: typeof v.name === "string" ? v.name : v.UDID };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return rows.filter((r): r is BootedSimulator => r !== null);
+}
+
+async function simctlBooted(): Promise<BootedSimulator[]> {
+  return parseBootedDevices(await run("xcrun", ["simctl", "list", "devices", "booted", "-j"]));
+}
+
 export const defaultSimDeps: SimDiscoveryDeps = {
   scanSockets() {
     let names: string[];
@@ -117,8 +157,12 @@ export const defaultSimDeps: SimDiscoveryDeps = {
     }
     return out;
   },
-  async listBooted() {
-    return parseBootedDevices(await run("xcrun", ["simctl", "list", "devices", "booted", "-j"]));
+  async listBooted(authoritative) {
+    if (!authoritative) {
+      const fast = await readBootedFromDeviceSet();
+      if (fast.length > 0) return fast;
+    }
+    return simctlBooted();
   },
   async socketFor(udid) {
     const p = (await run("xcrun", ["simctl", "getenv", udid, "RWI_LISTEN_SOCKET"])).trim();
@@ -150,7 +194,7 @@ export class SimulatorDiscovery implements SourceDiscovery {
   private mapped = new Set<string>();
   private resolving = false;
   private again = false;
-  private lastResolveAt = 0;
+  private lastAuthoritativeAt = 0;
   private lastSignature: string | null = null;
   private stopped = false;
 
@@ -205,20 +249,21 @@ export class SimulatorDiscovery implements SourceDiscovery {
     for (const [p, since] of this.unmapped) {
       if (!scan.has(p) || now - since > this.newSocketRetryMs) this.unmapped.delete(p);
     }
-    if (changed || this.unmapped.size > 0 || now - this.lastResolveAt >= this.fullRescanMs) {
-      void this.resolve();
-    }
+    if (now - this.lastAuthoritativeAt >= this.fullRescanMs) void this.resolve(true);
+    else if (changed || this.unmapped.size > 0) void this.resolve();
   }
 
-  private async resolve(): Promise<void> {
+  private async resolve(authoritative = false): Promise<void> {
     if (this.stopped) return;
     if (this.resolving) {
       this.again = true;
       return;
     }
     this.resolving = true;
+    // Start the safety-rescan clock now: it covers the very first resolve too.
+    if (authoritative || this.lastAuthoritativeAt === 0) this.lastAuthoritativeAt = Date.now();
     try {
-      const found = await this.find();
+      const found = await this.find(authoritative);
       if (this.stopped) return;
       this.mapped = new Set(found.map((f) => f.socketPath));
       for (const f of found) this.unmapped.delete(f.socketPath);
@@ -233,7 +278,6 @@ export class SimulatorDiscovery implements SourceDiscovery {
       debug(`resolve failed: ${(e as Error)?.message ?? e}`);
     } finally {
       this.resolving = false;
-      this.lastResolveAt = Date.now();
       this.resolveReady();
       if (this.again && !this.stopped) {
         this.again = false;
@@ -242,10 +286,10 @@ export class SimulatorDiscovery implements SourceDiscovery {
     }
   }
 
-  private async find(): Promise<Found[]> {
+  private async find(authoritative: boolean): Promise<Found[]> {
     let booted: BootedSimulator[];
     try {
-      booted = await this.deps.listBooted();
+      booted = await this.deps.listBooted(authoritative);
     } catch (e) {
       debug(`simctl unavailable (${(e as Error)?.message ?? e}); falling back to lsof`);
       const rows = await this.deps.lsof().catch(() => []);

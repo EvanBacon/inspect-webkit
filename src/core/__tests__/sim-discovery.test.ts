@@ -172,3 +172,53 @@ test("parseLsofSockets (F12): never throws, only webinspectord_sim sockets", () 
     for (const r of parseLsofSockets(junk)) expect(r.socketPath.endsWith("webinspectord_sim.socket")).toBe(true);
   }
 });
+
+test("readBootedFromDeviceSet reads CoreSimulator device.plist files (no simctl spawn)", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { encodeXml } = await import("../../plist");
+  const { readBootedFromDeviceSet } = await import("../sim-discovery");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "devset-"));
+  try {
+    const mk = (udid: string, state: number, extra: Record<string, any> = {}) => {
+      fs.mkdirSync(path.join(dir, udid));
+      fs.writeFileSync(path.join(dir, udid, "device.plist"), encodeXml({ UDID: udid, name: `Dev ${udid}`, state, ...extra }));
+    };
+    mk("U-BOOTED", 3);
+    mk("U-SHUTDOWN", 1);
+    mk("U-DELETED", 3, { isDeleted: true });
+    fs.mkdirSync(path.join(dir, "junk"));
+    fs.writeFileSync(path.join(dir, "junk", "device.plist"), "not a plist");
+    fs.writeFileSync(path.join(dir, "device_set.plist"), "x");
+    expect(await readBootedFromDeviceSet(dir)).toEqual([{ udid: "U-BOOTED", name: "Dev U-BOOTED" }]);
+    expect(await readBootedFromDeviceSet(path.join(dir, "missing"))).toEqual([]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the periodic safety rescan asks simctl authoritatively", async () => {
+  const seen: boolean[] = [];
+  const d = new SimulatorDiscovery({
+    deps: {
+      scanSockets: () => [SOCK("a")],
+      listBooted: async (authoritative?: boolean) => {
+        seen.push(!!authoritative);
+        return [{ udid: "U-1", name: "A" }];
+      },
+      socketFor: async () => SOCK("a"),
+      lsof: async () => [],
+      connect: async () => {
+        throw new Error("unused");
+      },
+    },
+    pollMs: 10,
+    fullRescanMs: 50,
+  });
+  d.start(() => {});
+  stops.push(() => d.stop());
+  await d.ready;
+  expect(seen[0]).toBe(false);
+  expect(await waitUntil(() => seen.includes(true), 1000)).toBe(true);
+});
