@@ -589,9 +589,13 @@ export class Target {
       this.stateLog.delete(key); // re-insert at the end: keep replay order
       this.stateLog.set(key, entry);
     }
-    // Provisional targets that already got a snapshot need the change too.
+    // Provisional targets that already got a snapshot need the change too;
+    // any other target no longer has the current state (activating it
+    // later, e.g. falling back to an older page, replays the log).
     for (const [id, t] of this.targets) {
-      if (id !== sentTo && t.provisional && this.stateSyncedTo.has(id)) this.replayTo(id, entry);
+      if (id === sentTo || !this.stateSyncedTo.has(id)) continue;
+      if (t.provisional) this.replayTo(id, entry);
+      else this.stateSyncedTo.delete(id);
     }
   }
 

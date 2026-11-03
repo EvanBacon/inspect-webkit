@@ -394,3 +394,28 @@ test("a callTarget that timed out while queued is never sent later", async () =>
   await r.created("page-2");
   expect(r.envelopes.some((e) => e.inner.params?.expression === "sideEffect()")).toBe(false);
 });
+
+// Found by the long (100k-case) run of page-channel-model: state set while
+// another committed page was not the active one was never replayed to it.
+// page-0 was "already synced", so falling back to it skipped the replay.
+test("falling back to an older page replays state set after it stopped being active", async () => {
+  const r = makeRig();
+  await r.created("page-0");
+  await r.created("page-1", "page", true);
+  await r.commit("page-0", "page-1");
+  await r.tools({ id: 1, method: "Network.enable", params: {} });
+  expect(r.envelopes.filter((e) => e.inner.method === "Network.enable").map((e) => e.targetId)).toEqual(["page-1"]);
+  await r.destroyed("page-1"); // page-0 is still alive and committed: the bridge falls back to it
+  expect(r.t.debugState().active).toBe("page-0");
+  expect(r.envelopes.filter((e) => e.inner.method === "Network.enable").map((e) => e.targetId)).toEqual(["page-1", "page-0"]);
+});
+
+test("a page that already has the state is not sent it again", async () => {
+  const r = makeRig();
+  await r.created("page-0");
+  await r.tools({ id: 1, method: "Network.enable", params: {} });
+  await r.created("page-1", "page", true); // provisional: gets a snapshot now
+  await r.commit("page-0", "page-1");
+  await r.destroyed("page-0");
+  expect(r.envelopes.filter((e) => e.inner.method === "Network.enable").map((e) => e.targetId)).toEqual(["page-0", "page-1"]);
+});
