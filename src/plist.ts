@@ -124,6 +124,12 @@ function encodeReal(v: number): string {
   return String(v);
 }
 
+/** XML plist dates are YYYY-MM-DDTHH:MM:SSZ: a valid Date in years 0–9999. */
+function xmlDateOk(d: Date): boolean {
+  const y = d.getUTCFullYear();
+  return Number.isFinite(d.getTime()) && y >= 0 && y <= 9999;
+}
+
 function encodeValue(v: PlistValue, indent: string): string {
   if (v === null || v === undefined) return `${indent}<string></string>`;
   if (typeof v === "boolean") return `${indent}<${v ? "true" : "false"}/>`;
@@ -135,7 +141,10 @@ function encodeValue(v: PlistValue, indent: string): string {
   }
   if (typeof v === "bigint") return `${indent}<integer>${v.toString()}</integer>`;
   if (v instanceof Uint8Array) return `${indent}<data>${b64encode(v)}</data>`;
-  if (v instanceof Date) return `${indent}<date>${v.toISOString().replace(/\.\d+Z$/, "Z")}</date>`;
+  if (v instanceof Date) {
+    if (!xmlDateOk(v)) fail(`date out of range for an XML plist: ${String(v.getTime())}`);
+    return `${indent}<date>${v.toISOString().replace(/\.\d+Z$/, "Z")}</date>`;
+  }
   if (Array.isArray(v)) {
     if (v.length === 0) return `${indent}<array/>`;
     const inner = v.map((x) => encodeValue(x, indent + "\t")).join("\n");
@@ -521,7 +530,10 @@ class BinaryDecoder {
         // date — 8-byte BE float, seconds since 2001-01-01 UTC
         if (low !== 3) fail(`bad date marker 0x${marker.toString(16)}`);
         this.need(off + 1, 8);
-        return new Date(Date.UTC(2001, 0, 1) + this.view.getFloat64(off + 1) * 1000);
+        const d = new Date(Date.UTC(2001, 0, 1) + this.view.getFloat64(off + 1) * 1000);
+        // Same range the XML side accepts, so a decoded value re-encodes.
+        if (!xmlDateOk(d)) fail(`bplist date out of range (${this.view.getFloat64(off + 1)} s)`);
+        return d;
       }
       case 0x4: {
         const [len, next] = this.len(low, off + 1);

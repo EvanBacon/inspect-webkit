@@ -287,3 +287,35 @@ describe("review follow-ups", () => {
     expect((decodeXml("<plist><date>2020-01-01T00:00:00Z</date></plist>") as Date).getTime()).toBe(Date.UTC(2020, 0, 1));
   });
 });
+
+// Found by the plist-bplist fuzzer: a date whose float is NaN / ±Infinity /
+// beyond JS's range decoded to an Invalid Date, which encodeXml then threw a
+// raw RangeError on; years past 9999 encoded to "+010000-…", which no XML
+// plist decoder (ours or CF's) accepts.
+describe("bplist dates XML can't carry", () => {
+  const date = (secs: number) => {
+    const b = new Uint8Array(9);
+    b[0] = 0x33;
+    new DataView(b.buffer).setFloat64(1, secs);
+    return buildBplist([b]);
+  };
+  for (const [name, secs] of [
+    ["NaN", NaN],
+    ["+Infinity", Infinity],
+    ["-Infinity", -Infinity],
+    ["beyond the JS date range", 1e20],
+    ["year 10000+", 2.6e11],
+    ["before year 0", -6.4e10],
+  ] as const) {
+    test(`${name} is a PlistError`, () => expectPlistError(() => decodeBinary(date(secs)), /date/));
+  }
+  test("ordinary dates still decode and round-trip", () => {
+    const d = decodeBinary(date(700_000_000)) as Date;
+    expect(d.toISOString()).toBe("2023-03-08T20:26:40.000Z");
+    expect((decodeXml(encodeXml(d)) as Date).getTime()).toBe(d.getTime());
+  });
+  test("encodeXml refuses dates it can't write, with a PlistError", () => {
+    expectPlistError(() => encodeXml(new Date(NaN)), /date/);
+    expectPlistError(() => encodeXml({ d: new Date(Date.UTC(10000, 0, 1)) }), /date/);
+  });
+});
