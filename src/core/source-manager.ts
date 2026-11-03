@@ -76,7 +76,8 @@ export type SourceInfo = {
   label: string;
   udid: string;
   state: SourceState;
-  /** Consecutive failed attempts (0 once ready). */
+  /** Consecutive failed attempts; reset once a connection has stayed up
+   *  for `minStableMs`. */
   attempts: number;
   lastError?: string;
 };
@@ -89,6 +90,9 @@ export type SourceManagerOptions = {
   firstReplyTimeoutMs?: number;
   backoffBaseMs?: number;
   backoffMaxMs?: number;
+  /** A connection must stay up this long before the backoff resets, so a
+   *  daemon that answers and immediately drops can't cause a hot loop. */
+  minStableMs?: number;
   /** @internal jitter source, for tests */
   random?: () => number;
 };
@@ -100,6 +104,7 @@ type Entry = {
   attempts: number;
   lastError?: string;
   timer: ReturnType<typeof setTimeout> | null;
+  stableTimer: ReturnType<typeof setTimeout> | null;
   abort: AbortController | null;
   conn: { wi: WebInspectorClient; lockdown?: LockdownClient } | null;
   source: Source | null;
@@ -125,6 +130,7 @@ export class SourceManager {
   private readonly firstReplyTimeoutMs: number;
   private readonly backoffBaseMs: number;
   private readonly backoffMaxMs: number;
+  private readonly minStableMs: number;
   private readonly random: () => number;
 
   constructor(private opts: SourceManagerOptions) {
@@ -132,6 +138,7 @@ export class SourceManager {
     this.firstReplyTimeoutMs = opts.firstReplyTimeoutMs ?? 30_000;
     this.backoffBaseMs = opts.backoffBaseMs ?? 500;
     this.backoffMaxMs = opts.backoffMaxMs ?? 15_000;
+    this.minStableMs = opts.minStableMs ?? 5_000;
     this.random = opts.random ?? Math.random;
   }
 
@@ -249,6 +256,7 @@ export class SourceManager {
           state: "connecting",
           attempts: 0,
           timer: null,
+          stableTimer: null,
           abort: null,
           conn: null,
           source: null,
@@ -261,7 +269,17 @@ export class SourceManager {
       if (e.desc.endpoint !== desc.endpoint) {
         debug(`${desc.label}: endpoint ${e.desc.endpoint} → ${desc.endpoint}; reconnecting`);
         this.dispose(e);
-        const fresh: Entry = { ...e, desc, removed: false, attempts: 0, timer: null, abort: null, conn: null, source: null };
+        const fresh: Entry = {
+          ...e,
+          desc,
+          removed: false,
+          attempts: 0,
+          timer: null,
+          stableTimer: null,
+          abort: null,
+          conn: null,
+          source: null,
+        };
         this.entries.set(desc.id, fresh);
         void this.connect(fresh);
       } else {
@@ -283,9 +301,11 @@ export class SourceManager {
     this.emitChange(); // a fresh entry starts in "connecting"
     const abort = new AbortController();
     e.abort = abort;
-    const connectTimer = setTimeout(
-      () => abort.abort(new Error(`connect timed out after ${this.connectTimeoutMs}ms`)),
-      this.connectTimeoutMs,
+    const connectTimer = unrefTimer(
+      setTimeout(
+        () => abort.abort(new Error(`connect timed out after ${this.connectTimeoutMs}ms`)),
+        this.connectTimeoutMs,
+      ),
     );
     let conn: Entry["conn"];
     try {
@@ -317,7 +337,7 @@ export class SourceManager {
         offAbort();
         resolve(ok);
       };
-      const timer = setTimeout(() => done(false), this.firstReplyTimeoutMs);
+      const timer = unrefTimer(setTimeout(() => done(false), this.firstReplyTimeoutMs));
       const unsub = conn.wi.subscribe(() => done(true));
       const offClose = conn.wi.onClose(() => done(false));
       const onAbort = () => done(false);
@@ -344,6 +364,8 @@ export class SourceManager {
     };
     conn.wi.onClose(() => {
       if (e.source !== source) return;
+      if (e.stableTimer) clearTimeout(e.stableTimer);
+      e.stableTimer = null;
       e.source = null;
       e.conn = null;
       if (e.removed || this.stopped) return;
@@ -359,8 +381,17 @@ export class SourceManager {
       this.scheduleReconnect(e);
     });
     if (e.attempts > 0 || e.lastError) debug(`${e.desc.label}: ready after ${e.attempts} retries`);
-    e.attempts = 0;
     e.lastError = undefined;
+    // Only a connection that stays up resets the backoff.
+    e.stableTimer = unrefTimer(
+      setTimeout(() => {
+        e.stableTimer = null;
+        if (e.source === source) {
+          e.attempts = 0;
+          this.emitChange();
+        }
+      }, this.minStableMs),
+    );
     e.source = source;
     this.setState(e, "ready");
     console.error(`# source ready: ${e.desc.label} (${e.desc.id})`);
@@ -392,7 +423,8 @@ export class SourceManager {
   private dispose(e: Entry): void {
     e.removed = true;
     if (e.timer) clearTimeout(e.timer);
-    e.timer = null;
+    if (e.stableTimer) clearTimeout(e.stableTimer);
+    e.timer = e.stableTimer = null;
     e.abort?.abort(new Error("source removed"));
     if (e.conn) closeConn(e.conn);
     e.conn = null;

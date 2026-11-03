@@ -193,7 +193,7 @@ export class SimulatorDiscovery implements SourceDiscovery {
   private unmapped = new Map<string, number>();
   private mapped = new Set<string>();
   private resolving = false;
-  private again = false;
+  private again: "no" | "yes" | "authoritative" = "no";
   private lastAuthoritativeAt = 0;
   private lastSignature: string | null = null;
   private stopped = false;
@@ -214,8 +214,10 @@ export class SimulatorDiscovery implements SourceDiscovery {
     (this.timer as { unref?: () => void }).unref?.();
   }
 
+  /** A source dropped: was its simulator shut down? Ask simctl (device.plist
+   *  may lag behind). */
   refresh(): void {
-    void this.resolve();
+    void this.resolve(true);
   }
 
   stop(): void {
@@ -256,7 +258,8 @@ export class SimulatorDiscovery implements SourceDiscovery {
   private async resolve(authoritative = false): Promise<void> {
     if (this.stopped) return;
     if (this.resolving) {
-      this.again = true;
+      if (authoritative) this.again = "authoritative";
+      else if (this.again === "no") this.again = "yes";
       return;
     }
     this.resolving = true;
@@ -279,9 +282,10 @@ export class SimulatorDiscovery implements SourceDiscovery {
     } finally {
       this.resolving = false;
       this.resolveReady();
-      if (this.again && !this.stopped) {
-        this.again = false;
-        void this.resolve();
+      if (this.again !== "no" && !this.stopped) {
+        const authoritativeAgain = this.again === "authoritative";
+        this.again = "no";
+        void this.resolve(authoritativeAgain);
       }
     }
   }

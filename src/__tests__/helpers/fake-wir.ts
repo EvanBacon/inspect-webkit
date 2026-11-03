@@ -207,6 +207,11 @@ export function makeFakeDaemon(
   opts: {
     replyDelayMs?: number;
     silent?: boolean;
+    /** Only push the app list after _rpc_reportIdentifier: (some iOS
+     *  versions never answer _rpc_getConnectedApplications:). */
+    ignoreGetConnectedApplications?: boolean;
+    /** Close the connection this long after the first reply. */
+    dropAfterMs?: number;
     pages?: Array<{ id: number; url?: string; title?: string }>;
     appId?: string;
   } = {},
@@ -227,7 +232,11 @@ export function makeFakeDaemon(
     for (const m of fresh) {
       const reply = () => {
         if (rig.sock.destroyed) return;
+        if (firstReplyAt === null && opts.dropAfterMs !== undefined) {
+          setTimeout(() => rig.sock.emit("close"), opts.dropAfterMs);
+        }
         firstReplyAt ??= Date.now();
+        if (m.__selector === "_rpc_getConnectedApplications:" && opts.ignoreGetConnectedApplications) return;
         if (m.__selector === "_rpc_reportIdentifier:" || m.__selector === "_rpc_getConnectedApplications:") {
           rig.push("_rpc_reportConnectedApplicationList:", {
             WIRApplicationDictionaryKey: {

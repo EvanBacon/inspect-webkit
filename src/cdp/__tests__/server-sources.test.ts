@@ -94,3 +94,35 @@ test("target ids are stable (UDID-based) across a webinspectord reconnect", asyn
   expect(await waitUntil(() => daemons.length === 2 && s.server.getTargets().length === 1, 3000)).toBe(true);
   expect((await s.list()).map((t) => t.id)).toEqual(before);
 });
+
+test("stop() detaches the server from sources that outlive it (caller-owned manager)", async () => {
+  const daemons: ReturnType<typeof makeFakeDaemon>[] = [];
+  const desc: SourceDescriptor = {
+    id: "sim:KEEP",
+    kind: "simulator",
+    udid: "KEEP",
+    label: "Sim",
+    endpoint: "/tmp/k",
+    async open() {
+      const d = makeFakeDaemon({ pages: [{ id: 1 }] });
+      daemons.push(d);
+      return { wi: d.wi };
+    },
+  };
+  const s = await serverWith(desc);
+  expect(await waitUntil(() => s.server.getTargets().length === 1, 2000)).toBe(true);
+  const wi = daemons[0]!.wi as any;
+  const base = { subs: wi.subscribers.size, closes: wi.closeHandlers.size };
+  s.server.stop();
+  expect(wi.subscribers.size).toBeLessThan(base.subs);
+  expect(wi.closeHandlers.size).toBeLessThan(base.closes);
+  // The manager (still running) must not see the stopped server react.
+  const before = daemons[0]!.sent().filter((m) => m.__selector === "_rpc_forwardGetListing:").length;
+  daemons[0]!.push("_rpc_applicationConnected:", {
+    WIRApplicationIdentifierKey: "PID:9",
+    WIRApplicationBundleIdentifierKey: "com.example",
+    WIRIsApplicationProxyKey: false,
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  expect(daemons[0]!.sent().filter((m) => m.__selector === "_rpc_forwardGetListing:").length).toBe(before);
+});

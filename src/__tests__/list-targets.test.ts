@@ -57,3 +57,46 @@ test("repeated listTargets() calls reuse one long-lived connection (R10)", async
   expect(daemons.length).toBe(1);
   expect(daemons[0]!.sock.destroyed).toBe(false);
 });
+
+test("listTargets() works when the daemon only pushes its app list (no reply to getConnectedApplications)", async () => {
+  const desc: SourceDescriptor = {
+    id: "sim:UDID-2",
+    kind: "simulator",
+    udid: "UDID-2",
+    label: "iPhone",
+    endpoint: "/tmp/y",
+    async open() {
+      const d = makeFakeDaemon({ ignoreGetConnectedApplications: true, pages: [{ id: 5 }] });
+      return { wi: d.wi };
+    },
+  };
+  setSharedSourceManagerFactory(
+    () =>
+      new SourceManager({
+        discoveries: [{ ready: Promise.resolve(), start: (cb) => cb([desc]), refresh() {}, stop() {} }],
+      }),
+  );
+  const t0 = Date.now();
+  const targets = await listTargets();
+  expect(targets.map((t) => t.pageId)).toEqual([5]);
+  expect(Date.now() - t0).toBeLessThan(2000);
+});
+
+test("a manager left connecting at release() does not keep the host process alive", async () => {
+  const script = `
+    import { SourceManager, setSharedSourceManagerFactory, acquireSharedSourceManager } from ${JSON.stringify(`${import.meta.dir}/../core/source-manager`)};
+    import { makeFakeDaemon } from ${JSON.stringify(`${import.meta.dir}/helpers/fake-wir`)};
+    const desc = { id: "sim:X", kind: "simulator", udid: "X", label: "X", endpoint: "/x",
+      async open() { return { wi: makeFakeDaemon({ silent: true }).wi }; } };
+    setSharedSourceManagerFactory(() => new SourceManager({ discoveries: [{ ready: Promise.resolve(), start: (cb) => cb([desc]), refresh() {}, stop() {} }] }));
+    const lease = acquireSharedSourceManager();
+    await lease.manager.settled(100);
+    lease.release(30000);
+  `;
+  const t0 = Date.now();
+  const p = Bun.spawn(["bun", "-e", script], { stdout: "ignore", stderr: "ignore" });
+  const code = await Promise.race([p.exited, new Promise((r) => setTimeout(() => r("timeout"), 8000))]);
+  if (code === "timeout") p.kill();
+  expect(code).toBe(0);
+  expect(Date.now() - t0).toBeLessThan(5000);
+}, 15_000);

@@ -158,6 +158,7 @@ async function sendRecv(
     socket.destroy();
     stream.close(err);
   }, timeoutMs);
+  timer.unref?.();
   try {
     writeFrame(socket, tag, body);
     const reply = await readFrame(stream, socket);

@@ -222,3 +222,29 @@ test("the periodic safety rescan asks simctl authoritatively", async () => {
   expect(seen[0]).toBe(false);
   expect(await waitUntil(() => seen.includes(true), 1000)).toBe(true);
 });
+
+test("refresh() (a source dropped) asks simctl authoritatively", async () => {
+  const seen: boolean[] = [];
+  const d = new SimulatorDiscovery({
+    deps: {
+      scanSockets: () => [SOCK("a")],
+      listBooted: async (authoritative?: boolean) => {
+        seen.push(!!authoritative);
+        return [];
+      },
+      socketFor: async () => null,
+      lsof: async () => [],
+      connect: async () => {
+        throw new Error("unused");
+      },
+    },
+    pollMs: 10_000,
+    fullRescanMs: 60_000,
+  });
+  d.start(() => {});
+  stops.push(() => d.stop());
+  await d.ready;
+  d.refresh();
+  expect(await waitUntil(() => seen.length === 2, 1000)).toBe(true);
+  expect(seen).toEqual([false, true]);
+});

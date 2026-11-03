@@ -246,3 +246,23 @@ test("settled() does not leak change listeners when it times out", async () => {
   for (let i = 0; i < 5; i++) await m.settled(20);
   expect((m as any).changeHandlers.size).toBe(0);
 });
+
+test("a source that answers and then drops right away backs off instead of hot-looping", async () => {
+  const s = simDesc("LLLL", () => makeFakeDaemon({ dropAfterMs: 1 }));
+  const m = manager([new FakeDiscovery([s.desc])], { backoffBaseMs: 20, backoffMaxMs: 10_000, minStableMs: 1000 });
+  m.start();
+  await new Promise((r) => setTimeout(r, 600));
+  // 20, 40, 80, 160, 320 ms … → only a handful of connects in 600 ms.
+  expect(s.daemons.length).toBeLessThanOrEqual(6);
+  expect(m.list()[0]!.attempts).toBeGreaterThanOrEqual(3);
+});
+
+test("attempts reset once a connection has stayed up for minStableMs", async () => {
+  let n = 0;
+  const s = simDesc("MMMM", () => makeFakeDaemon(n++ < 3 ? { dropAfterMs: 1 } : {}));
+  const m = manager([new FakeDiscovery([s.desc])], { backoffBaseMs: 5, minStableMs: 100 });
+  m.start();
+  expect(await waitUntil(() => s.daemons.length === 4 && stateOf(m, "sim:MMMM") === "ready", 2000)).toBe(true);
+  expect(m.list()[0]!.attempts).toBeGreaterThan(0);
+  expect(await waitUntil(() => m.list()[0]!.attempts === 0, 1000)).toBe(true);
+});

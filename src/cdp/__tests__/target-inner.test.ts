@@ -350,3 +350,47 @@ test("non-target mode (no Target.targetCreated within 250ms) still flushes raw",
   await r.fromTarget({ id: 1, result: { v: 1 } });
   expect(r.repliesFor(1)).toEqual([{ id: 1, result: { v: 1 } }]);
 });
+
+test("a URL breakpoint whose request failed is not replayed", async () => {
+  const r = makeRig();
+  await r.created("page-1");
+  await r.tools({ id: 1, method: "Debugger.setBreakpointByUrl", params: { url: "https://x/a.js", lineNumber: 1 } });
+  await r.destroyed("page-1"); // request fails before its reply
+  expect(r.repliesFor(1)[0]?.error).toBeDefined();
+  await r.created("page-2");
+  expect(r.envelopes.filter((e) => e.targetId === "page-2").length).toBe(0);
+});
+
+test("a duplicate setBreakpointByUrl error does not drop the live breakpoint from replay", async () => {
+  const r = makeRig();
+  await r.created("page-1");
+  const params = { url: "https://x/a.js", lineNumber: 7 };
+  await r.tools({ id: 1, method: "Debugger.setBreakpointByUrl", params });
+  await r.inner("page-1", { id: 1, result: { breakpointId: "bp-7", locations: [] } });
+  await r.tools({ id: 2, method: "Debugger.setBreakpointByUrl", params });
+  await r.inner("page-1", { id: 2, error: { code: -32000, message: "Breakpoint for given location already exists." } });
+  await r.created("page-2", "page", true);
+  const replayed = r.envelopes.filter((e) => e.targetId === "page-2").map((e) => e.inner.method);
+  expect(replayed).toEqual(["Debugger.setBreakpointByUrl"]);
+});
+
+test("a late inner reply for a request already failed is not delivered twice", async () => {
+  const r = makeRig();
+  await r.created("page-1");
+  await r.tools({ id: 1, method: "Runtime.evaluate", params: {} });
+  await r.destroyed("page-1");
+  await r.inner("page-1", { id: 1, result: { late: true } });
+  expect(r.repliesFor(1).length).toBe(1);
+});
+
+test("a callTarget that timed out while queued is never sent later", async () => {
+  const r = makeRig();
+  r.t.callTimeoutMs = 30;
+  r.t.swapTimeoutMs = 5_000;
+  await r.created("page-1");
+  await r.destroyed("page-1");
+  const p = r.t.callTarget("Runtime.evaluate", { expression: "sideEffect()" }).catch((e) => e);
+  expect(await p).toBeInstanceOf(Error);
+  await r.created("page-2");
+  expect(r.envelopes.some((e) => e.inner.params?.expression === "sideEffect()")).toBe(false);
+});

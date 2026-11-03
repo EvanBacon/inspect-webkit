@@ -163,14 +163,19 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     }
   }
 
+  /** Per-source listener removers, so stop() detaches from sources that
+   *  outlive this server (shared manager). */
+  const sourceListeners = new Map<Source, () => void>();
+
   function addSource(src: Source): void {
     if (sources.has(src) || src.wi.closed) return;
     sources.add(src);
     appsBySource.set(src, []);
     subscribedAppsBySource.set(src, new Set());
 
-    src.wi.onClose(() => {
-      console.error(`# source disconnected: ${src.label}`);
+    const offClose = src.wi.onClose(() => {
+      offSub();
+      sourceListeners.delete(src);
       sources.delete(src);
       appsBySource.delete(src);
       for (const k of [...listingsByApp.keys()]) {
@@ -179,7 +184,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       terminateSessions((s) => s.source === src, `inspector source ${src.label} disconnected`);
     });
 
-    src.wi.subscribe((m) => {
+    const offSub = src.wi.subscribe((m) => {
       const sel = m.__selector as string | undefined;
       const arg = m.__argument as Record<string, any> | undefined;
       if (!sel || !arg) return;
@@ -266,6 +271,10 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       }
     });
 
+    sourceListeners.set(src, () => {
+      offSub();
+      offClose();
+    });
     src.wi.send("_rpc_reportIdentifier:", {});
     src.wi.send("_rpc_getConnectedApplications:", {});
   }
@@ -739,6 +748,8 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
 
   function releaseSources() {
     offSourceReady();
+    for (const off of sourceListeners.values()) off();
+    sourceListeners.clear();
     if (manager) {
       releaseManager();
       return;

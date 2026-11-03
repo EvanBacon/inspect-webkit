@@ -141,6 +141,9 @@ export class Target {
   private stateSyncedTo = new Set<string>();
   private pendingBreakpoints = new Map<number, string>(); // request id → stateLog key
   private breakpointKeys = new Map<string, string>(); // breakpointId → stateLog key
+  /** Client ids we already answered with an error on Safari's behalf; a
+   *  late real reply for one of them is dropped, not delivered twice. */
+  private failedToolIds = new Set<number>();
 
   /** Deadline for callTarget(); override per instance (tests, slow devices). */
   callTimeoutMs = CALL_TARGET_TIMEOUT_MS;
@@ -179,6 +182,8 @@ export class Target {
       const timer = setTimeout(() => {
         if (this.adapterRequestMap.delete(id)) {
           this.inFlight.delete(id);
+          // Still held (no target yet)? Then it must never be sent.
+          this.queue = this.queue.filter((q) => q.msg.id !== id);
           reject(new Error(`${method} timed out after ${timeoutMs}ms`));
         }
       }, timeoutMs);
@@ -263,6 +268,7 @@ export class Target {
     try {
       if (typeof msg.method === "string" && id !== undefined) {
         this.toolRequestMap.set(id, msg.method);
+        this.failedToolIds.delete(id);
       }
       const list = typeof msg.method === "string" ? this.filters.get(`tools::${msg.method}`) : undefined;
       let outgoing: CdpMessage | null = msg;
@@ -385,6 +391,10 @@ export class Target {
         // Late ack / reply for a bridge request that already settled (or
         // timed out). Never leak it to the client.
         debug(`dropping reply for settled bridge id ${msg.id}`);
+        return;
+      }
+      if (this.failedToolIds.delete(msg.id)) {
+        debug(`dropping late reply for already-failed request ${msg.id}`);
         return;
       }
       // Unknown id; pass through.
@@ -544,14 +554,26 @@ export class Target {
     this.pendingBreakpoints.delete(msg.id!);
     const bid = msg.result?.breakpointId;
     if (typeof bid === "string") this.breakpointKeys.set(bid, key);
-    else if (msg.error) this.stateLog.delete(key);
+    else if (msg.error) this.forgetBreakpoint(key);
+  }
+
+  /** Drop a URL breakpoint from the replay log unless a live breakpoint
+   *  (one Safari acknowledged with an id) still backs it — e.g. a duplicate
+   *  set that failed with "already exists". */
+  private forgetBreakpoint(key: string): void {
+    for (const k of this.breakpointKeys.values()) if (k === key) return;
+    this.stateLog.delete(key);
   }
 
   /** The inner request `innerId` will never be answered: tell its owner. */
   private failRequest(innerId: number | undefined, error: CdpError): void {
     if (innerId === undefined) return;
     this.inFlight.delete(innerId);
-    this.pendingBreakpoints.delete(innerId);
+    const bpKey = this.pendingBreakpoints.get(innerId);
+    if (bpKey !== undefined) {
+      this.pendingBreakpoints.delete(innerId);
+      this.forgetBreakpoint(bpKey);
+    }
     const pending = this.adapterRequestMap.get(innerId);
     if (pending) {
       this.adapterRequestMap.delete(innerId);
@@ -560,6 +582,8 @@ export class Target {
       return;
     }
     if (this.toolRequestMap.has(innerId)) {
+      if (this.failedToolIds.size >= MAX_QUEUED) this.failedToolIds.clear();
+      this.failedToolIds.add(innerId);
       this.fireErrorToTools(innerId, {
         code: typeof error?.code === "number" ? error.code : -32000,
         message: errMessage(error),

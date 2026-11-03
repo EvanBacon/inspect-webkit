@@ -77,9 +77,24 @@ function uuid(): string {
 export type WIMessage = Record<string, PlistValue>;
 type Subscriber = (m: WIMessage) => void;
 
+function parseApp(appId: string, raw: PlistValue): WIApplication {
+  const a = (raw && typeof raw === "object" ? raw : {}) as Record<string, PlistValue>;
+  return {
+    appId,
+    bundleId: a.WIRApplicationBundleIdentifierKey as string | undefined,
+    name: a.WIRApplicationNameKey as string | undefined,
+    isProxy: Boolean(a.WIRIsApplicationProxyKey),
+    isActive: Boolean(a.WIRIsApplicationActiveKey),
+    hostAppId: a.WIRHostApplicationIdentifierKey as string | undefined,
+  };
+}
+
 export class WebInspectorClient {
   private connectionId = uuid();
   private subscribers = new Set<Subscriber>();
+  /** Latest application set, kept current from pushed WIR events; null
+   *  until the daemon has sent its first list. */
+  private apps: Map<string, WIApplication> | null = null;
   private closeHandlers = new Set<() => void>();
   private reading: Promise<void>;
   private _closed = false;
@@ -105,6 +120,7 @@ export class WebInspectorClient {
             debugLog(`skipping undecodable ${body.length}-byte frame: ${(e as Error)?.message ?? e}`);
             continue;
           }
+          this.trackApps(msg);
           for (const fn of [...this.subscribers]) {
             try {
               fn(msg);
@@ -120,6 +136,31 @@ export class WebInspectorClient {
         this.markClosed();
       }
     })();
+  }
+
+  private trackApps(msg: Record<string, PlistValue>) {
+    const arg = msg.__argument as Record<string, PlistValue> | undefined;
+    if (!arg || typeof arg !== "object") return;
+    const appId = arg.WIRApplicationIdentifierKey;
+    switch (msg.__selector) {
+      case "_rpc_reportConnectedApplicationList:": {
+        const dict = arg.WIRApplicationDictionaryKey;
+        this.apps = new Map();
+        if (dict && typeof dict === "object" && !Array.isArray(dict)) {
+          for (const [id, raw] of Object.entries(dict as Record<string, PlistValue>)) {
+            this.apps.set(id, parseApp(id, raw));
+          }
+        }
+        break;
+      }
+      case "_rpc_applicationConnected:":
+      case "_rpc_applicationUpdated:":
+        if (this.apps && typeof appId === "string") this.apps.set(appId, parseApp(appId, arg));
+        break;
+      case "_rpc_applicationDisconnected:":
+        if (this.apps && typeof appId === "string") this.apps.delete(appId);
+        break;
+    }
   }
 
   private markClosed() {
@@ -201,26 +242,15 @@ export class WebInspectorClient {
   }
 
   async listApplications(): Promise<WIApplication[]> {
+    // On a long-lived connection the pushed list (kept current by
+    // applicationConnected / Disconnected events) is authoritative.
+    if (this.apps) return [...this.apps.values()];
     // The device pushes the app list automatically after reportIdentifier.
     // Some iOS versions also reply to _rpc_getConnectedApplications: — try both.
     this.send("_rpc_getConnectedApplications:", {});
     const m = await this.waitFor("_rpc_reportConnectedApplicationList:", 3000).catch(() => null);
     if (!m) return [];
-    const arg = m.__argument as Record<string, PlistValue>;
-    const dict = (arg.WIRApplicationDictionaryKey as Record<string, PlistValue>) ?? {};
-    const apps: WIApplication[] = [];
-    for (const [appId, raw] of Object.entries(dict)) {
-      const a = raw as Record<string, PlistValue>;
-      apps.push({
-        appId,
-        bundleId: a.WIRApplicationBundleIdentifierKey as string | undefined,
-        name: a.WIRApplicationNameKey as string | undefined,
-        isProxy: Boolean(a.WIRIsApplicationProxyKey),
-        isActive: Boolean(a.WIRIsApplicationActiveKey),
-        hostAppId: a.WIRHostApplicationIdentifierKey as string | undefined,
-      });
-    }
-    return apps;
+    return [...(this.apps ?? new Map<string, WIApplication>()).values()];
   }
 
   async getListing(appId: string): Promise<WIPage[]> {
