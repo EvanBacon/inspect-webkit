@@ -346,3 +346,52 @@ test("an explicit Log.enable keeps console events flowing after Runtime.disable"
   await tick();
   expect(page.innerRequests("Console.disable")).toEqual([]);
 });
+
+test("a reload's new main-world context replaces that frame's old contexts in the replay", async () => {
+  const { page, join, a } = await targetRig();
+  await a.send({ id: 1, method: "Runtime.enable" });
+  page.answerAll();
+  const ctx = (id: number, type: string, frameId = "0.1") => ({
+    method: "Runtime.executionContextCreated",
+    params: { context: { id, type, name: type === "normal" ? "" : "ext", frameId } },
+  });
+  page.pushInner("page-1", ctx(1, "normal"));
+  page.pushInner("page-1", ctx(2, "internal"));
+  page.pushInner("page-1", ctx(3, "normal", "0.2")); // an iframe
+  // Reload: WebKit just announces new contexts, never destroys the old ones.
+  page.pushInner("page-1", ctx(4, "normal"));
+  page.pushInner("page-1", ctx(5, "internal"));
+  await tick();
+  const b = join("B");
+  await tick();
+  await b.send({ id: 1, method: "Runtime.enable" });
+  await tick();
+  expect(b.events("Runtime.executionContextCreated").map((e) => e.params.context.id)).toEqual([3, 4, 5]);
+});
+
+test("a first enable that Safari rejects is not counted; the next client's enable goes to Safari", async () => {
+  const { page, join, a } = await targetRig();
+  const b = join("B");
+  await tick();
+  await a.send({ id: 1, method: "Animation.enable" });
+  const [f] = page.innerRequests("Animation.enable");
+  page.push({ result: {}, id: f!.outer.id });
+  page.pushInner("page-1", { error: { code: -32601, message: "'Animation.enable' was not found" }, id: f!.inner.id });
+  await tick();
+  expect(a.replies(1)[0]?.error).toBeDefined();
+  await b.send({ id: 1, method: "Animation.enable" });
+  expect(page.innerRequests("Animation.enable").length).toBe(2);
+});
+
+test("a first enable whose envelope fails is not counted either", async () => {
+  const { page, join, a } = await targetRig();
+  const b = join("B");
+  await tick();
+  await a.send({ id: 1, method: "Network.enable" });
+  const [f] = page.innerRequests("Network.enable");
+  page.push({ id: f!.outer.id, error: { code: -32000, message: "Missing target for given targetId" } });
+  await tick();
+  expect(a.replies(1)[0]?.error).toBeDefined();
+  await b.send({ id: 1, method: "Network.enable" });
+  expect(page.innerRequests("Network.enable").length).toBe(2);
+});

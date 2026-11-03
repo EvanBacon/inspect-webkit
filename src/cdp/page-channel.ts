@@ -64,6 +64,8 @@ type Route = {
   method?: string;
   /** Envelope routes: the wire id of the inner request they carry. */
   innerWireId?: number;
+  /** A first enable: on an error reply the client never held the domain. */
+  countedKey?: string;
 };
 
 /**
@@ -83,6 +85,8 @@ const INVENTORY: Record<string, InventorySpec> = {
     remove: { "Runtime.executionContextDestroyed": (p) => p?.executionContextId },
     clear: ["Runtime.executionContextsCleared"],
   },
+  // WebKit never sends executionContextDestroyed / executionContextsCleared:
+  // a reload just announces new contexts. See noteInventory().
   Debugger: {
     add: {
       "Debugger.scriptParsed": (p) => p?.scriptId,
@@ -266,9 +270,11 @@ export class PageChannel {
 
   private fromClient(client: Client, m: CdpMessage, targetKey: string, outerId: number | undefined): void {
     if (this.isClosed || client.gone) return;
-    if (typeof m.method === "string" && this.answeredLocally(client, m, targetKey, outerId)) return;
+    const gate = typeof m.method === "string" ? this.gate(client, m, targetKey, outerId) : "forward";
+    if (gate === "answered") return;
     if (m.method === "Debugger.removeBreakpoint") client.breakpoints.delete(m.params?.breakpointId);
     const innerWire = typeof m.id === "number" ? this.route(client, m.id, targetKey, m.method) : undefined;
+    if (innerWire !== undefined && gate !== "forward") this.routes.get(innerWire)!.countedKey = gate.first;
     const inner = innerWire === undefined ? m : { ...m, id: innerWire };
     if (outerId === undefined) return this.write(inner);
     const outerWire = this.route(client, outerId, targetKey, undefined, innerWire);
@@ -280,40 +286,46 @@ export class PageChannel {
   }
 
   /**
-   * Reference-count X.enable / X.disable. Returns true when the request was
-   * answered here instead of going to Safari.
+   * Reference-count X.enable / X.disable: "answered" when the request was
+   * answered here, `{first}` for a first enable that goes to Safari (undone
+   * if Safari rejects it), otherwise "forward".
    */
-  private answeredLocally(client: Client, m: CdpMessage, targetKey: string, outerId: number | undefined): boolean {
+  private gate(
+    client: Client,
+    m: CdpMessage,
+    targetKey: string,
+    outerId: number | undefined,
+  ): "answered" | "forward" | { first: string } {
     const method = m.method!;
     const domain = domainOf(method);
-    if (domain === "Target") return false;
+    if (domain === "Target") return "forward";
     const verb = method.slice(domain.length + 1);
-    if (verb !== "enable" && verb !== "disable") return false;
+    if (verb !== "enable" && verb !== "disable") return "forward";
     const key = keyOf(targetKey, domain);
     if (verb === "enable") {
-      if (client.enabled.has(key)) return false; // the client's own re-enable: Safari's answer
+      if (client.enabled.has(key)) return "forward"; // the client's own re-enable: Safari's answer
       client.enabled.add(key);
       const before = this.holders.get(key) ?? 0;
       this.holders.set(key, before + 1);
       if (before === 0) {
         this.inventory.delete(key); // WebKit re-reports it
-        return false;
+        return { first: key };
       }
       this.answer(client, m, targetKey, outerId, [...(this.inventory.get(key)?.values() ?? [])]);
-      return true;
+      return "answered";
     }
     const mine = client.enabled.delete(key);
     const others = mine ? this.release(key) : (this.holders.get(key) ?? 0);
     if (others > 0) {
       if (mine && domain === "Debugger") this.dropBreakpoints(client, targetKey);
       this.answer(client, m, targetKey, outerId, []);
-      return true;
+      return "answered";
     }
     this.inventory.delete(key);
     if (domain === "Debugger") {
       for (const [id, t] of client.breakpoints) if (t === targetKey) client.breakpoints.delete(id);
     }
-    return false;
+    return "forward";
   }
 
   /** One fewer holder of `key`; returns how many remain. */
@@ -432,9 +444,15 @@ export class PageChannel {
     const r = this.routes.get(wireId);
     if (!r) return debug(`dropping reply for unknown wire id ${wireId}`);
     this.routes.delete(wireId);
-    // A failed envelope: its inner request never ran and won't be answered.
-    if (r.innerWireId !== undefined && msg.error) this.routes.delete(r.innerWireId);
     const client = r.client;
+    if (msg.error) {
+      // A failed envelope: its inner request never ran and won't be answered.
+      const inner = r.innerWireId !== undefined ? this.routes.get(r.innerWireId) : undefined;
+      if (inner) this.routes.delete(r.innerWireId!);
+      // A rejected first enable: the client never held the domain.
+      const counted = r.countedKey ?? inner?.countedKey;
+      if (counted && client && !client.gone && client.enabled.delete(counted)) this.release(counted);
+    }
     if (!client || client.gone) return;
     if (r.method && BREAKPOINT_SETTERS.has(r.method)) {
       const bid = msg.result?.breakpointId;
@@ -475,6 +493,13 @@ export class PageChannel {
     if (!addKey) return;
     let items = this.inventory.get(key);
     if (!items) this.inventory.set(key, (items = new Map()));
+    const ctx = method === "Runtime.executionContextCreated" ? params?.context : undefined;
+    if (ctx?.type === "normal" && typeof ctx.frameId === "string") {
+      // A frame's new main world: its previous contexts (all worlds) are dead.
+      for (const [k, r] of [...items]) {
+        if (parseObject(r)?.params?.context?.frameId === ctx.frameId) items.delete(k);
+      }
+    }
     const k = addKey(params);
     const itemKey = k === undefined || k === null ? `\0seq${++this.inventorySeq}` : String(k);
     items.delete(itemKey); // re-insert at the end: replay in arrival order
