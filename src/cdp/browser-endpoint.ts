@@ -20,6 +20,7 @@
 // page is really gone, and only then is the target reported destroyed.
 
 import type { WebSocket as WSWebSocket } from "ws";
+import { capture } from "../capture";
 
 export type BrowserEntry = {
   targetId: string;
@@ -61,9 +62,12 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
   // recurse browser-level routing through it.
   let browserSessionId: string | null = null;
 
+  const capSession = capture.on ? capture.session("browser") : "";
+
   function send(obj: any): void {
     if (ws.readyState !== 1) return;
     const s = JSON.stringify(obj);
+    if (capture.on) capture.cdp("out", capSession, s);
     if (debug) console.error(`[browser] tools<< ${s.slice(0, 240)}`);
     ws.send(s);
   }
@@ -329,6 +333,7 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
 
   function onMessage(raw: Buffer, isBinary: boolean) {
     const text = isBinary ? new TextDecoder().decode(raw) : raw.toString();
+    if (capture.on) capture.cdp("in", capSession, text);
     if (debug) console.error(`[browser] tools>> ${text.slice(0, 240)}`);
     let msg: any;
     try {

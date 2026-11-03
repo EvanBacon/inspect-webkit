@@ -44,6 +44,7 @@ import {
   safeDecode,
 } from "./http";
 import { attachBrowserWs, type PageSessionHandle } from "./browser-endpoint";
+import { capture } from "../capture";
 
 export type { Source } from "../core/source-manager";
 
@@ -637,9 +638,11 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       closeWs(ws, CLOSE_INTERNAL, `unknown target ${targetId}`);
       return;
     }
+    const capSession = capture.on ? capture.session(`page:${targetId}`) : "";
     const sess = createPageSession(
       entry,
       (text) => {
+        if (capture.on) capture.cdp("out", capSession, text);
         if (ws.readyState === 1) ws.send(text);
       },
       (reason, code) => closeWs(ws, code, reason),
@@ -661,6 +664,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     ws.on("message", (raw, isBinary) => {
       try {
         const text = isBinary ? new TextDecoder().decode(raw as Buffer) : raw.toString();
+        if (capture.on) capture.cdp("in", capSession, text);
         sess.onMessageFromTools(text);
       } catch (e) {
         console.error(`# ws message error: ${(e as Error)?.message ?? e}`);

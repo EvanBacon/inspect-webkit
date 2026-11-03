@@ -217,6 +217,12 @@ What doesn't (Safari-side gaps, not bridge bugs):
 
 Set `INSPECT_WEBKIT_DEBUG=1` to log every CDP frame in either direction.
 
+Set `INSPECT_WEBKIT_CAPTURE=<dir>` to record traffic for fuzzing: every raw
+WIR frame (both directions) and every CDP message on a client WebSocket is
+appended to `<dir>/capture-<pid>-<time>.jsonl`. It's off by default and
+costs nothing when off. Captures hold page contents and whatever you type
+into DevTools, so treat them as sensitive. See [`fuzz/README.md`](fuzz/README.md).
+
 #### Verification
 
 The bridge ships with layered e2e probes under `scripts/e2e/` —

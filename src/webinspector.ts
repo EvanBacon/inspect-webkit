@@ -17,6 +17,7 @@
 import { encodeXml, decode, type PlistValue } from "./plist";
 import { ByteStream } from "./stream";
 import { type AnySocket } from "./socket";
+import { capture } from "./capture";
 
 export type WIPage = {
   pageId: number;
@@ -54,6 +55,7 @@ async function readFrameBody(stream: ByteStream): Promise<Uint8Array> {
 
 function writeMessage(socket: WISocket, msg: Record<string, PlistValue>) {
   const body = encodeXml(msg);
+  if (capture.on) capture.wir("out", body);
   // One write per frame: header + body in a single buffer.
   const out = Buffer.allocUnsafe(4 + body.length);
   out.writeUInt32BE(body.length, 0);
@@ -107,6 +109,7 @@ export class WebInspectorClient {
       try {
         while (!stream.closed) {
           const body = await readFrameBody(stream);
+          if (capture.on) capture.wir("in", body);
           let msg: Record<string, PlistValue>;
           try {
             const decoded = decode(body);
