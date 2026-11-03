@@ -9,22 +9,28 @@
 // WebSocket endpoint (one per debugging session):
 //   ws://host:port/devtools/page/<targetId>
 //
-// targetId is "device:<udid>:<appId>:<pageId>" or "sim:<pid>:<appId>:<pageId>".
+// targetId is "device:<udid>:<appId>:<pageId>" or "sim:<udid>:<appId>:<pageId>".
 //
 // Architecture:
-//   For each connected source (USB device or simulator) we keep a single
-//   WebInspectorClient ("backend") open for the server's lifetime. We
-//   periodically refresh its target listing. When a DevTools client opens
+//   Sources (USB/Wi-Fi devices, simulators) come from the shared
+//   SourceManager (core/source-manager.ts), which discovers them, keeps one
+//   WebInspectorClient ("backend") per source open for the server's
+//   lifetime and reconnects with backoff. The server listens immediately
+//   and adds each source as it becomes ready. We periodically refresh each
+//   source's target listing. When a DevTools client opens
 //   a WS, we allocate a fresh WIRSenderKey, send forwardSocketSetup, and
 //   route _rpc_applicationSentData: frames whose WIRDestinationKey matches
 //   to that session's Target.
 
 import { WebSocketServer, type WebSocket as WSWebSocket } from "ws";
 import type { AddressInfo } from "node:net";
-import * as usbmux from "../usbmux";
-import { LockdownClient } from "../lockdown";
-import { WebInspectorClient, type WIMessage } from "../webinspector";
-import * as sim from "../sim";
+import type { WIMessage } from "../webinspector";
+import {
+  type Source,
+  type SourceInfo,
+  type SourceManager,
+  acquireSharedSourceManager,
+} from "../core/source-manager";
 import { Target as CdpTarget } from "./target";
 import { installIOSFilters } from "./ios-protocol";
 import {
@@ -38,13 +44,7 @@ import {
 } from "./http";
 import { attachBrowserWs, type PageSessionHandle } from "./browser-endpoint";
 
-export type Source = {
-  kind: "device" | "simulator";
-  id: string; // udid for device, "sim:<pid>" for simulator
-  label: string;
-  wi: WebInspectorClient;
-  lockdown?: LockdownClient;
-};
+export type { Source } from "../core/source-manager";
 
 type CdpTargetEntry = {
   targetId: string;
@@ -95,6 +95,11 @@ export type CdpServerOptions = CdpServerBaseOptions & {
    * discovering USB devices and simulators.
    */
   openSources?: () => Promise<Source[]>;
+  /**
+   * @internal Use this SourceManager instead of the process-wide shared one
+   * (tests). The caller owns its lifetime.
+   */
+  sourceManager?: SourceManager;
   /** @internal Test seam: override PAGE_GONE_GRACE_MS. */
   pageGoneGraceMs?: number;
 };
@@ -118,18 +123,20 @@ export type CdpServer = {
   releaseHighlight(targetId?: string): void;
   /** Addresses the HTTP/WS server is listening on. */
   addresses(): AddressInfo[];
+  /** Known inspector sources and their connection state. */
+  getSources(): SourceInfo[];
 };
+
+/** How long to wait for sources before warning that none were found. */
+const NO_SOURCES_WARN_MS = 15_000;
 
 export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpServer> {
   const port = opts.port ?? 9222;
   const host = opts.host ?? "localhost";
   const pageGoneGraceMs = opts.pageGoneGraceMs ?? PAGE_GONE_GRACE_MS;
 
-  const sources: Source[] = await (opts.openSources ?? openAllSources)();
-  if (sources.length === 0) {
-    console.error("warn: no inspectable sources found (no devices, no simulators).");
-    console.error("      The server will still run; new targets will appear if you start one.");
-  }
+  // Ready sources. A reconnect produces a new Source object (same id).
+  const sources = new Set<Source>();
 
   // listing cache: continuously refreshed from each source's WI client.
   const listingsByApp = new Map<string, Map<string, any>>();
@@ -156,13 +163,16 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     }
   }
 
-  for (const src of sources) {
+  function addSource(src: Source): void {
+    if (sources.has(src) || src.wi.closed) return;
+    sources.add(src);
     appsBySource.set(src, []);
     subscribedAppsBySource.set(src, new Set());
 
     src.wi.onClose(() => {
       console.error(`# source disconnected: ${src.label}`);
-      appsBySource.set(src, []);
+      sources.delete(src);
+      appsBySource.delete(src);
       for (const k of [...listingsByApp.keys()]) {
         if (k.startsWith(`${src.id}:`)) listingsByApp.delete(k);
       }
@@ -258,6 +268,31 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
 
     src.wi.send("_rpc_reportIdentifier:", {});
     src.wi.send("_rpc_getConnectedApplications:", {});
+  }
+
+  let manager: SourceManager | null = null;
+  let releaseManager = () => {};
+  let offSourceReady = () => {};
+  if (opts.openSources) {
+    for (const src of await opts.openSources()) addSource(src);
+  } else {
+    if (opts.sourceManager) {
+      manager = opts.sourceManager;
+    } else {
+      const lease = acquireSharedSourceManager();
+      manager = lease.manager;
+      releaseManager = () => lease.release();
+    }
+    offSourceReady = manager.onSourceReady(addSource);
+    for (const src of manager.readySources()) addSource(src);
+    manager.start();
+    // Never block listen() on discovery; just tell the user if nothing shows up.
+    const m = manager;
+    void m.settled(NO_SOURCES_WARN_MS).then(() => {
+      if (m.isStopped || m.list().length > 0) return;
+      console.error("warn: no inspectable sources found yet (no devices, no booted simulators).");
+      console.error("      The server keeps running; new targets will appear when you start one.");
+    });
   }
 
   /** Close sessions whose page has dropped out of its app's listing. */
@@ -702,16 +737,25 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     });
   }
 
-  try {
-    await httpServer.listen(host, port);
-  } catch (e) {
-    clearInterval(refreshTimer);
-    for (const src of sources) {
+  function releaseSources() {
+    offSourceReady();
+    if (manager) {
+      releaseManager();
+      return;
+    }
+    for (const src of [...sources]) {
       try {
         src.wi.close();
         src.lockdown?.close();
       } catch {}
     }
+  }
+
+  try {
+    await httpServer.listen(host, port);
+  } catch (e) {
+    clearInterval(refreshTimer);
+    releaseSources();
     throw e;
   }
   logCdpServerBanner({ brand: "safari", host, port: httpServer.addresses()[0]?.port ?? port });
@@ -728,12 +772,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       }
       wss.close();
       httpServer.close();
-      for (const src of sources) {
-        try {
-          src.wi.close();
-          src.lockdown?.close();
-        } catch {}
-      }
+      releaseSources();
     },
     /** Snapshot of current debuggable targets. */
     getTargets(): CdpTargetEntry[] {
@@ -754,75 +793,18 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     addresses(): AddressInfo[] {
       return httpServer.addresses();
     },
+    getSources(): SourceInfo[] {
+      if (manager) return manager.list();
+      return [...sources].map((s) => ({
+        id: s.id,
+        kind: s.kind,
+        label: s.label,
+        udid: s.udid ?? s.id,
+        state: s.wi.closed ? ("closed" as const) : ("ready" as const),
+        attempts: 0,
+      }));
+    },
   };
-}
-
-async function openAllSources(): Promise<Source[]> {
-  const [devices, simulators] = await Promise.all([openDeviceSources(), openSimulatorSources()]);
-  return [...devices, ...simulators];
-}
-
-async function openDeviceSources(): Promise<Source[]> {
-  let devices: usbmux.Device[] = [];
-  try {
-    devices = await usbmux.listDevices();
-  } catch (e) {
-    console.error(`warn: usbmux: ${(e as Error).message}`);
-    return [];
-  }
-  const sources = await Promise.all(devices.map(openDeviceSource));
-  return sources.filter((s): s is Source => s !== null);
-}
-
-async function openDeviceSource(d: usbmux.Device): Promise<Source | null> {
-  try {
-    const pair = await usbmux.readPairRecord(d.Properties.SerialNumber);
-    const lockdown = await LockdownClient.open(d, pair);
-    await lockdown.startSession();
-    const svc = await lockdown.startService("com.apple.webinspector");
-    const { socket, stream } = await lockdown.connectService(svc);
-    const wi = new WebInspectorClient(socket, stream);
-    await wi.reportIdentifier();
-    return {
-      kind: "device",
-      id: `device:${d.Properties.SerialNumber}`,
-      label: `device:${d.Properties.SerialNumber.slice(0, 8)}`,
-      wi,
-      lockdown,
-    };
-  } catch (e) {
-    console.error(`warn: device ${d.Properties.SerialNumber}: ${(e as Error).message}`);
-    return null;
-  }
-}
-
-async function openSimulatorSources(): Promise<Source[]> {
-  let runtimes: sim.SimRuntime[] = [];
-  try {
-    runtimes = await sim.findSimulatorSockets();
-  } catch (e) {
-    console.error(`warn: simulator discovery: ${(e as Error).message}`);
-    return [];
-  }
-  const sources = await Promise.all(runtimes.map(openSimulatorSource));
-  return sources.filter((s): s is Source => s !== null);
-}
-
-async function openSimulatorSource(r: sim.SimRuntime): Promise<Source | null> {
-  try {
-    const { socket, stream } = await sim.connectSimulator(r.socketPath);
-    const wi = new WebInspectorClient(socket, stream);
-    await wi.reportIdentifier();
-    return {
-      kind: "simulator",
-      id: `sim:${r.pid}`,
-      label: `sim:${r.pid}`,
-      wi,
-    };
-  } catch (e) {
-    console.error(`warn: simulator ${r.socketPath}: ${(e as Error).message}`);
-    return null;
-  }
 }
 
 // chrome://inspect filters on type==="page" — map page-like Safari categories

@@ -139,6 +139,13 @@ export class WebInspectorClient {
     }
   }
 
+  /** Don't let this connection alone keep the process alive. */
+  unref(): void {
+    try {
+      (this.socket as { unref?: () => void }).unref?.();
+    } catch {}
+  }
+
   /** True once the underlying connection has ended (or was torn down). */
   get closed(): boolean {
     return this._closed;

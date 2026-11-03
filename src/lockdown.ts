@@ -72,9 +72,13 @@ function upgradeSocketTLS(
   detach: () => void,
   pair: usbmux.PairRecord,
   label: string,
+  signal?: AbortSignal,
 ): Promise<{ socket: tls.TLSSocket; stream: ByteStream; detach: () => void }> {
   return new Promise((resolve, reject) => {
     detach();
+    // The raw socket's error listener went with detach(); keep one so a
+    // late error can't go unhandled.
+    rawSocket.on("error", () => {});
     const newStream = new ByteStream();
     const tlsSocket = tls.connect({
       socket: rawSocket,
@@ -85,12 +89,19 @@ function upgradeSocketTLS(
     });
     const onError = (err: Error) => {
       debug(`${label} tls error:`, err);
+      signal?.removeEventListener("abort", onAbort);
+      tlsSocket.destroy();
       newStream.close(err);
       reject(err);
     };
+    const onAbort = () =>
+      onError(signal?.reason instanceof Error ? signal.reason : new Error(`${label} TLS handshake aborted`));
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
     tlsSocket.once("error", onError);
     tlsSocket.once("secureConnect", () => {
       debug(`${label} tls handshake complete`);
+      signal?.removeEventListener("abort", onAbort);
       tlsSocket.off("error", onError);
       const newDetach = attachStream(tlsSocket, newStream);
       resolve({ socket: tlsSocket, stream: newStream, detach: newDetach });
@@ -108,13 +119,22 @@ export class LockdownClient {
     private udid: string,
     private deviceID: number,
     detach: () => void,
+    private signal?: AbortSignal,
   ) {
     this.detach = detach;
   }
 
-  static async open(device: usbmux.Device, pair: usbmux.PairRecord): Promise<LockdownClient> {
+  /** `signal` aborts every handshake step of this client (open,
+   *  startSession, connectService) by destroying its sockets. */
+  static async open(
+    device: usbmux.Device,
+    pair: usbmux.PairRecord,
+    signal?: AbortSignal,
+  ): Promise<LockdownClient> {
     debug("connecting usbmux tunnel to lockdown port", LOCKDOWN_PORT);
-    const { socket, stream, detach } = await usbmux.connect(device.DeviceID, LOCKDOWN_PORT);
+    const { socket, stream, detach } = await usbmux.connect(device.DeviceID, LOCKDOWN_PORT, {
+      signal,
+    });
 
     const c = new LockdownClient(
       socket,
@@ -123,14 +143,20 @@ export class LockdownClient {
       device.Properties.SerialNumber,
       device.DeviceID,
       detach,
+      signal,
     );
-    debug("sending QueryType");
-    writeFrame(socket, { Request: "QueryType" });
-    const r = await readFrame(stream, socket);
-    debug("QueryType reply:", r);
-    expect(r, "QueryType");
-    if (r.Type !== "com.apple.mobile.lockdown") {
-      throw new Error(`unexpected lockdown Type: ${String(r.Type)}`);
+    try {
+      debug("sending QueryType");
+      writeFrame(socket, { Request: "QueryType" });
+      const r = await readFrame(stream, socket);
+      debug("QueryType reply:", r);
+      expect(r, "QueryType");
+      if (r.Type !== "com.apple.mobile.lockdown") {
+        throw new Error(`unexpected lockdown Type: ${String(r.Type)}`);
+      }
+    } catch (e) {
+      socket.destroy();
+      throw e;
     }
     return c;
   }
@@ -147,7 +173,13 @@ export class LockdownClient {
     expect(r, "StartSession");
     if (r.EnableSessionSSL) {
       debug("upgrading to TLS");
-      const upgraded = await upgradeSocketTLS(this.socket, this.detach, this.pair, "lockdown");
+      const upgraded = await upgradeSocketTLS(
+        this.socket,
+        this.detach,
+        this.pair,
+        "lockdown",
+        this.signal,
+      );
       this.socket = upgraded.socket;
       this.stream = upgraded.stream;
       this.detach = upgraded.detach;
@@ -174,14 +206,18 @@ export class LockdownClient {
     stream: ByteStream;
   }> {
     debug("connecting service tunnel to port", svc.port, "ssl=", svc.enableServiceSSL);
-    const { socket, stream, detach } = await usbmux.connect(this.deviceID, svc.port);
+    const { socket, stream, detach } = await usbmux.connect(this.deviceID, svc.port, {
+      signal: this.signal,
+    });
     if (!svc.enableServiceSSL) return { socket, stream };
 
-    const upgraded = await upgradeSocketTLS(socket, detach, this.pair, "service");
+    const upgraded = await upgradeSocketTLS(socket, detach, this.pair, "service", this.signal);
     return { socket: upgraded.socket, stream: upgraded.stream };
   }
 
   close() {
-    this.socket.end();
+    try {
+      this.socket.end();
+    } catch {}
   }
 }

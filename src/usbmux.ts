@@ -44,14 +44,50 @@ const SOCKET_PATH = "/var/run/usbmuxd";
 
 export type RawSocket = net.Socket;
 
-async function openRaw(): Promise<{
+/** Where usbmuxd listens. Honours libimobiledevice's USBMUXD_SOCKET_ADDRESS
+ *  ("UNIX:/path" or a bare path). */
+export function defaultSocketPath(): string {
+  const env = process.env.USBMUXD_SOCKET_ADDRESS;
+  if (env && env.startsWith("UNIX:")) return env.slice(5);
+  if (env && env.startsWith("/")) return env;
+  return SOCKET_PATH;
+}
+
+/** Default deadline for a usbmuxd request/response. */
+export const USBMUX_TIMEOUT_MS = 5_000;
+
+export type UsbmuxOptions = {
+  socketPath?: string;
+  /** Per-request deadline (default USBMUX_TIMEOUT_MS). */
+  timeoutMs?: number;
+  /** Aborting destroys the connection (handshakes in progress fail). */
+  signal?: AbortSignal;
+};
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("aborted");
+}
+
+async function openRaw(opts: UsbmuxOptions = {}): Promise<{
   socket: net.Socket;
   stream: ByteStream;
   detach: () => void;
 }> {
   const stream = new ByteStream();
+  const { signal } = opts;
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection({ path: SOCKET_PATH });
+    if (signal?.aborted) return reject(abortError(signal));
+    const socket = net.createConnection({ path: opts.socketPath ?? defaultSocketPath() });
+    // Abort tears the connection down whenever it happens: during connect
+    // or during whatever handshake the caller runs on top.
+    const onAbort = () => {
+      const err = abortError(signal!);
+      socket.destroy();
+      stream.close(err);
+      reject(err);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    socket.once("close", () => signal?.removeEventListener("abort", onAbort));
     const onError = (err: Error) => {
       stream.close(err);
       reject(err);
@@ -108,6 +144,7 @@ async function sendRecv(
   stream: ByteStream,
   tag: number,
   payload: Record<string, PlistValue>,
+  timeoutMs = USBMUX_TIMEOUT_MS,
 ): Promise<Record<string, PlistValue>> {
   const body = encodeXml({
     ClientVersionString: "inspect-webkit-1.0",
@@ -115,28 +152,41 @@ async function sendRecv(
     kLibUSBMuxVersion: 3,
     ...payload,
   });
-  writeFrame(socket, tag, body);
-  const reply = await readFrame(stream, socket);
-  return decodeXml(reply) as Record<string, PlistValue>;
+  // A wedged usbmuxd must not hang us: tear the connection down at the deadline.
+  const timer = setTimeout(() => {
+    const err = new Error(`usbmux ${String(payload.MessageType)} timed out after ${timeoutMs}ms`);
+    socket.destroy();
+    stream.close(err);
+  }, timeoutMs);
+  try {
+    writeFrame(socket, tag, body);
+    const reply = await readFrame(stream, socket);
+    return decodeXml(reply) as Record<string, PlistValue>;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-export async function listDevices(): Promise<Device[]> {
-  const { socket, stream } = await openRaw();
+export async function listDevices(opts: UsbmuxOptions = {}): Promise<Device[]> {
+  const { socket, stream } = await openRaw(opts);
   try {
-    const r = await sendRecv(socket, stream, 1, { MessageType: "ListDevices" });
+    const r = await sendRecv(socket, stream, 1, { MessageType: "ListDevices" }, opts.timeoutMs);
     return ((r.DeviceList as unknown) as Device[]) ?? [];
   } finally {
     socket.end();
   }
 }
 
-export async function readPairRecord(udid: string): Promise<PairRecord> {
-  const { socket, stream } = await openRaw();
+export async function readPairRecord(udid: string, opts: UsbmuxOptions = {}): Promise<PairRecord> {
+  const { socket, stream } = await openRaw(opts);
   try {
-    const r = await sendRecv(socket, stream, 1, {
-      MessageType: "ReadPairRecord",
-      PairRecordID: udid,
-    });
+    const r = await sendRecv(
+      socket,
+      stream,
+      1,
+      { MessageType: "ReadPairRecord", PairRecordID: udid },
+      opts.timeoutMs,
+    );
     const data = r.PairRecordData as Uint8Array | undefined;
     if (!data) {
       throw new Error(
@@ -156,19 +206,75 @@ export async function readPairRecord(udid: string): Promise<PairRecord> {
 export async function connect(
   deviceID: number,
   port: number,
+  opts: UsbmuxOptions = {},
 ): Promise<{ socket: net.Socket; stream: ByteStream; detach: () => void }> {
-  const { socket, stream, detach } = await openRaw();
-  // PortNumber is htons-style: low 16 bits hold the byte-swapped port.
-  const portBE = ((port & 0xff) << 8) | ((port >> 8) & 0xff);
-  const r = await sendRecv(socket, stream, 1, {
-    MessageType: "Connect",
-    DeviceID: deviceID,
-    PortNumber: portBE,
-  });
-  if (r.MessageType !== "Result" || r.Number !== 0) {
-    socket.end();
-    const code = r.Number ?? "?";
-    throw new Error(`Connect to device ${deviceID} port ${port} failed (code ${code})`);
+  const { socket, stream, detach } = await openRaw(opts);
+  try {
+    // PortNumber is htons-style: low 16 bits hold the byte-swapped port.
+    const portBE = ((port & 0xff) << 8) | ((port >> 8) & 0xff);
+    const r = await sendRecv(
+      socket,
+      stream,
+      1,
+      { MessageType: "Connect", DeviceID: deviceID, PortNumber: portBE },
+      opts.timeoutMs,
+    );
+    if (r.MessageType !== "Result" || r.Number !== 0) {
+      const code = r.Number ?? "?";
+      throw new Error(`Connect to device ${deviceID} port ${port} failed (code ${code})`);
+    }
+  } catch (e) {
+    socket.destroy();
+    throw e;
   }
   return { socket, stream, detach };
+}
+
+export type UsbmuxEvent = {
+  MessageType: string;
+  DeviceID?: number;
+  Properties?: DeviceProperties;
+};
+
+/**
+ * Subscribe to device attach/detach notifications ("Attached" with
+ * Properties, "Detached"). Resolves once usbmuxd accepted the Listen;
+ * `done` resolves when the connection ends (usbmuxd restarted, close()).
+ */
+export async function listen(
+  onEvent: (e: UsbmuxEvent) => void,
+  opts: UsbmuxOptions = {},
+): Promise<{ close(): void; unref(): void; done: Promise<void> }> {
+  const { socket, stream } = await openRaw(opts);
+  try {
+    const r = await sendRecv(socket, stream, 1, { MessageType: "Listen" }, opts.timeoutMs);
+    if (r.MessageType !== "Result" || r.Number !== 0) {
+      throw new Error(`usbmux Listen failed (code ${String(r.Number ?? "?")})`);
+    }
+  } catch (e) {
+    socket.destroy();
+    throw e;
+  }
+  const done = (async () => {
+    try {
+      for (;;) {
+        const body = await readFrame(stream, socket);
+        let msg: unknown;
+        try {
+          msg = decodeXml(body);
+        } catch {
+          continue; // undecodable notification; the frame boundary is intact
+        }
+        if (!msg || typeof msg !== "object" || Array.isArray(msg)) continue;
+        try {
+          onEvent(msg as UsbmuxEvent);
+        } catch {}
+      }
+    } catch {
+      // stream ended
+    } finally {
+      socket.destroy();
+    }
+  })();
+  return { close: () => socket.destroy(), unref: () => socket.unref(), done };
 }

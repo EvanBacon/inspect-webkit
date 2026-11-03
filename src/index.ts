@@ -4,9 +4,8 @@
 // and bridging them to the Chrome DevTools Protocol.
 
 import * as usbmux from "./usbmux";
-import * as sim from "./sim";
-import { LockdownClient } from "./lockdown";
-import { WebInspectorClient } from "./webinspector";
+import type { WebInspectorClient } from "./webinspector";
+import { acquireSharedSourceManager } from "./core/source-manager";
 
 export {
   startCdpServer,
@@ -20,6 +19,7 @@ export {
   type BunUpstream,
 } from "./cdp/bun-server";
 export type { Device, DeviceProperties } from "./usbmux";
+export type { SourceInfo, SourceState } from "./core/source-manager";
 
 export type Target = {
   source: "device" | "simulator";
@@ -40,71 +40,39 @@ export async function listDevices(): Promise<usbmux.Device[]> {
   return usbmux.listDevices();
 }
 
+/** How long listTargets() waits for sources that are still connecting (e.g.
+ *  webinspectord_sim inside launchd's ~10 s respawn throttle). */
+const LIST_TARGETS_SETTLE_MS = 15_000;
+/** Keep the shared connections warm this long after listTargets() returns,
+ *  so a follow-up call is instant and webinspectord doesn't idle-exit. The
+ *  connections never keep the process alive on their own. */
+const LIST_TARGETS_LINGER_MS = 30_000;
+
+/**
+ * Snapshot of every debuggable target on attached devices and booted
+ * simulators. Shares one long-lived inspector connection per source with
+ * any CDP server in the same process.
+ */
 export async function listTargets(): Promise<Target[]> {
-  const [deviceTargets, simulatorTargets] = await Promise.all([
-    listDeviceTargets(),
-    listSimulatorTargets(),
-  ]);
-  return [...deviceTargets.flat(), ...simulatorTargets.flat()];
-}
-
-async function listDeviceTargets(): Promise<Target[][]> {
-  const devices = await listDevices();
-  return Promise.all(devices.map(targetsForDevice));
-}
-
-async function listSimulatorTargets(): Promise<Target[][]> {
-  const runtimes = await sim.findSimulatorSockets();
-  return Promise.all(runtimes.map(targetsForSimulator));
-}
-
-async function targetsForDevice(d: usbmux.Device): Promise<Target[]> {
-  let session: { client: WebInspectorClient; lockdown: LockdownClient } | null = null;
+  const lease = acquireSharedSourceManager();
   try {
-    session = await openDeviceWebInspector(d);
-    return await targetsFromClient(session.client, {
-      source: "device",
-      udid: d.Properties.SerialNumber,
-      deviceID: d.DeviceID,
-    });
-  } catch (e) {
-    console.error(`warn: ${d.Properties.SerialNumber}: ${(e as Error).message}`);
-    return [];
+    await lease.manager.settled(LIST_TARGETS_SETTLE_MS);
+    const perSource = await Promise.all(
+      lease.manager.readySources().map((src) =>
+        targetsFromClient(src.wi, {
+          source: src.kind,
+          udid: src.udid ?? src.id,
+          ...(src.deviceID !== undefined ? { deviceID: src.deviceID } : {}),
+        }).catch((e) => {
+          console.error(`warn: ${src.label}: ${(e as Error).message}`);
+          return [] as Target[];
+        }),
+      ),
+    );
+    return perSource.flat();
   } finally {
-    session?.client.close();
-    session?.lockdown.close();
+    lease.release(LIST_TARGETS_LINGER_MS);
   }
-}
-
-async function targetsForSimulator(r: sim.SimRuntime): Promise<Target[]> {
-  let client: WebInspectorClient | null = null;
-  try {
-    const { socket, stream } = await sim.connectSimulator(r.socketPath);
-    client = new WebInspectorClient(socket, stream);
-    await client.reportIdentifier();
-    return await targetsFromClient(client, {
-      source: "simulator",
-      udid: `sim:${r.pid}`,
-    });
-  } catch (e) {
-    console.error(`warn: simulator (${r.socketPath}): ${(e as Error).message}`);
-    return [];
-  } finally {
-    client?.close();
-  }
-}
-
-async function openDeviceWebInspector(
-  device: usbmux.Device,
-): Promise<{ client: WebInspectorClient; lockdown: LockdownClient }> {
-  const pair = await usbmux.readPairRecord(device.Properties.SerialNumber);
-  const lockdown = await LockdownClient.open(device, pair);
-  await lockdown.startSession();
-  const svc = await lockdown.startService("com.apple.webinspector");
-  const { socket, stream } = await lockdown.connectService(svc);
-  const client = new WebInspectorClient(socket, stream);
-  await client.reportIdentifier();
-  return { client, lockdown };
 }
 
 async function targetsFromClient(
