@@ -145,3 +145,32 @@ test("close() rejects pending callTarget promises", async () => {
   // Further calls fail fast.
   await expect(rig.t.callTarget("DOM.getDocument", {})).rejects.toThrow();
 });
+
+// Found by the live fuzzer (fuzzlite2): a *request* named after an event
+// (Console.messageAdded, Inspector.inspect, …) gets Safari's "not found"
+// error, and that reply ran through the event's target-side filter, which
+// swallows events — so the client never got an answer.
+const EVENT_NAMES = [
+  "Console.messageAdded",
+  "Console.messagesCleared",
+  "Console.messageRepeatCountUpdated",
+  "Console.heapSnapshot",
+  "Inspector.inspect",
+  "Debugger.globalObjectCleared",
+];
+for (const method of EVENT_NAMES) {
+  test(`a request named ${method} still gets exactly one reply`, async () => {
+    const rig = makeRig();
+    await targetBased(rig);
+    await rig.t.onMessageFromTools(JSON.stringify({ id: 50, method }));
+    const inner = rig.toTarget.find((m) => m.id === 50);
+    expect(inner).toBeDefined();
+    const notFound = { error: { code: -32601, message: `'${method}' was not found` }, id: 50 };
+    await rig.t.onMessageFromTarget(
+      JSON.stringify({ method: "Target.dispatchMessageFromTarget", params: { targetId: "page-1", message: JSON.stringify(notFound) } }),
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    const replies = rig.toTools.filter((m) => m.id === 50);
+    expect(replies).toEqual([notFound]);
+  });
+}

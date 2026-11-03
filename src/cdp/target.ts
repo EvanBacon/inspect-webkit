@@ -156,6 +156,8 @@ export class Target {
   /** Client ids we already answered with an error on Safari's behalf; a
    *  late real reply for one of them is dropped, not delivered twice. */
   private failedToolIds = new Set<number>();
+  /** Replies whose target-side filters are running and haven't answered. */
+  private awaitingFilterAnswer = new Set<number>();
 
   /** Deadline for callTarget(); override per instance (tests, slow devices). */
   callTimeoutMs = CALL_TARGET_TIMEOUT_MS;
@@ -251,11 +253,13 @@ export class Target {
 
   fireResultToTools(id: number, result: any) {
     this.toolRequestMap.delete(id);
+    this.awaitingFilterAnswer.delete(id);
     this.sendToTools(JSON.stringify({ id, result }));
   }
 
   fireErrorToTools(id: number, error: { code?: number; message: string }) {
     this.toolRequestMap.delete(id);
+    this.awaitingFilterAnswer.delete(id);
     this.sendToTools(
       JSON.stringify({ id, error: { code: error.code ?? -32000, message: error.message } }),
     );
@@ -404,12 +408,24 @@ export class Target {
         if ("error" in msg && this.filters.has("target::error")) eventName = "target::error";
         const list = this.filters.get(eventName);
         if (!list) return this.sendToTools(rawMessage);
+        const id = msg.id;
+        this.awaitingFilterAnswer.add(id);
         let m: CdpMessage | null = msg;
-        for (const f of list) {
-          if (!m) break;
-          m = await f(m);
+        try {
+          for (const f of list) {
+            if (!m) break;
+            m = await f(m);
+          }
+        } catch (e) {
+          this.awaitingFilterAnswer.delete(id);
+          throw e; // deliverFromTarget passes the raw reply through
         }
+        // fire{Result,Error}ToTools clear the id when a filter answered itself.
+        const unanswered = this.awaitingFilterAnswer.delete(id);
         if (m) this.sendToTools(JSON.stringify(m));
+        // A swallowed reply nobody answered — e.g. a request named after an
+        // event, whose target filter drops events: pass it through as is.
+        else if (unanswered) this.sendToTools(rawMessage);
         return;
       }
       if (msg.id < 0) {
