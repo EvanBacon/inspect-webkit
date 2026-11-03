@@ -7,6 +7,8 @@ import * as net from "node:net";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 
+import { RESPONSE_BODY_REFETCH_MODES, type ResponseBodyRefetch } from "./refetch";
+
 export type CdpServerBaseOptions = {
   port?: number;
   /**
@@ -21,7 +23,25 @@ export type CdpServerBaseOptions = {
    * accepted.
    */
   allowOrigins?: string[];
+  /**
+   * Network.getResponseBody falls back to re-fetching the URL from this
+   * machine when WebKit can't return the body. The URL is chosen by the
+   * inspected page, so the fallback is restricted:
+   * - "public" (default): http(s) to public internet addresses only;
+   *   loopback, link-local and private networks are refused.
+   * - "any": also loopback / LAN (e.g. a local dev server), but never the
+   *   bridge's own ports.
+   * - "off": never re-fetch; only WebKit's own answer is used.
+   */
+  responseBodyRefetch?: ResponseBodyRefetch;
 };
+
+/** Validate `responseBodyRefetch` (it may come from untyped JS / a CLI). */
+export function checkResponseBodyRefetch(v: unknown): ResponseBodyRefetch {
+  if (v === undefined) return "public";
+  if (typeof v === "string" && (RESPONSE_BODY_REFETCH_MODES as readonly string[]).includes(v)) return v as ResponseBodyRefetch;
+  throw new TypeError(`responseBodyRefetch must be one of ${RESPONSE_BODY_REFETCH_MODES.join(", ")} (got ${String(v)})`);
+}
 
 export type CdpJsonTarget = {
   description: string;

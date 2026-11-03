@@ -12,6 +12,7 @@ import type { AddressInfo } from "node:net";
 import {
   type CdpServerBaseOptions,
   WS_MAX_PAYLOAD,
+  checkResponseBodyRefetch,
   buildJsonTarget,
   createCdpHttpServer,
   logCdpServerBanner,
@@ -41,6 +42,12 @@ export async function startBunCdpServer(opts: BunCdpServerOptions): Promise<BunC
   const port = opts.port ?? 9223;
   const host = opts.host ?? "localhost";
   const { upstreams } = opts;
+  const filterOpts = {
+    network: {
+      responseBodyRefetch: checkResponseBodyRefetch(opts.responseBodyRefetch),
+      bridgePorts: () => httpServer.addresses().map((a) => a.port),
+    },
+  };
 
   const httpServer = createCdpHttpServer({
     brand: "bun",
@@ -112,7 +119,7 @@ export async function startBunCdpServer(opts: BunCdpServerOptions): Promise<BunC
     // BunInspectorClient.forwardSocketData, which ignores them.
     const senderKey = crypto.randomUUID();
     const cdp = new CdpTarget(ws, bun as any, "bun", 0, senderKey);
-    installIOSFilters(cdp);
+    installIOSFilters(cdp, filterOpts);
 
     const unsub = bun.onFrame((text) => {
       if (debug) console.error(`[bun] target>> ${text.slice(0, 240)}`);

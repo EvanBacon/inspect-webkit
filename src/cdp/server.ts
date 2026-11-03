@@ -36,6 +36,7 @@ import { installIOSFilters } from "./ios-protocol";
 import {
   type CdpServerBaseOptions,
   WS_MAX_PAYLOAD,
+  checkResponseBodyRefetch,
   buildJsonTarget,
   createCdpHttpServer,
   logCdpServerBanner,
@@ -134,6 +135,14 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
   const port = opts.port ?? 9222;
   const host = opts.host ?? "localhost";
   const pageGoneGraceMs = opts.pageGoneGraceMs ?? PAGE_GONE_GRACE_MS;
+  // Per-session filter options. bridgePorts is read lazily: the server
+  // isn't listening yet.
+  const filterOpts = {
+    network: {
+      responseBodyRefetch: checkResponseBodyRefetch(opts.responseBodyRefetch),
+      bridgePorts: () => httpServer.addresses().map((a) => a.port),
+    },
+  };
 
   // Ready sources. A reconnect produces a new Source object (same id).
   const sources = new Set<Source>();
@@ -497,7 +506,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       send: (text: string) => sendToTools(text),
     } as unknown as WSWebSocket;
     const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, senderKey);
-    installIOSFilters(cdp);
+    installIOSFilters(cdp, filterOpts);
     sessions.set(senderKey, cdp);
 
     const debug = !!process.env.INSPECT_WEBKIT_DEBUG;
@@ -609,7 +618,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     const senderKey = crypto.randomUUID();
     const fakeWs = { readyState: 1, send: () => {} } as unknown as WSWebSocket;
     const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, senderKey);
-    installIOSFilters(cdp);
+    installIOSFilters(cdp, filterOpts);
     sessions.set(senderKey, cdp);
     const unsub = subscribeSessionData(entry, senderKey, (text) => cdp.onMessageFromTarget(text));
     entry.source.wi.forwardSocketSetup(entry.appId, entry.pageId, senderKey);

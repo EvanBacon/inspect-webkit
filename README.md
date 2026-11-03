@@ -103,6 +103,25 @@ rejects WebSocket upgrades that carry an `Origin` other than
   network you trust; the bridge prints a warning when you do.
 - `--allow-origin <origin...>` accepts extra WebSocket origins, for example a
   hosted DevTools frontend. Pass `"*"` to accept any origin.
+- `--response-body-refetch <public|any|off>` (API: `responseBodyRefetch`)
+  controls the fallback for `Network.getResponseBody`. The bridge first asks
+  WebKit for the body. Only if WebKit can't supply it does the bridge re-fetch
+  the URL from your Mac. That URL is chosen by the inspected page, so the
+  re-fetch is restricted:
+  - it uses http/https only;
+  - addresses are checked after DNS resolution, and the connection is pinned
+    to the checked address;
+  - it follows only same-origin redirects, at most 3, and checks each hop;
+  - it sends `Cookie`/`Authorization` only to the page's own origin;
+  - it times out after 10 s and refuses bodies over 4 MB.
+
+  The modes:
+  - `public` (default) refuses loopback, link-local (`169.254/16`,
+    `fe80::/10`), private (RFC 1918, CGNAT, `fc00::/7`) and reserved
+    addresses.
+  - `any` also allows localhost and the LAN, for local dev servers, but never
+    the bridge's own ports.
+  - `off` never re-fetches.
 
 Only one debugger can drive a WebKit page at a time. If a second DevTools
 client attaches to a page the bridge is already serving, the bridge closes the
@@ -144,8 +163,9 @@ What works:
   range → WIR ordinal mapping), `getMatchedStylesForNode`, `addRule`.
 - `Network` — cookies (`getAll/set/delete/clearBrowserCookies`), request
   lifecycle events (`requestWillBeSent`, `responseReceived`,
-  `loadingFinished`), `setCacheDisabled`, `setUserAgentOverride`,
-  `setExtraHTTPHeaders`, `emulateNetworkConditions`.
+  `loadingFinished`), `getResponseBody` (WebKit's own, with a restricted
+  re-fetch fallback; see `--response-body-refetch`), `setCacheDisabled`,
+  `setUserAgentOverride`, `setExtraHTTPHeaders`, `emulateNetworkConditions`.
 - `Emulation` — `setEmulatedMedia`, `setUserAgentOverride`,
   `setTouchEmulationEnabled`, `setScriptExecutionDisabled`.
 - `Overlay` — `highlightNode`/`Frame`/`Quad`/`Rect`, `hideHighlight`,
@@ -167,7 +187,6 @@ What works:
 
 What doesn't (Safari-side gaps, not bridge bugs):
 
-- `Network.getResponseBody` — Safari doesn't expose response bodies.
 - `Page.captureScreenshot` — not exposed by WIR.
 - `Page.startScreencast` — accepted but Safari emits no frames on iOS 26.
 - `Emulation.setDeviceMetricsOverride` — `Page.setScreenSizeOverride` was
