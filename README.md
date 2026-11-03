@@ -36,9 +36,26 @@ import { listTargets, startCdpServer } from "inspect-webkit";
 const targets = await listTargets();          // device + simulator pages
 
 const server = await startCdpServer({ port: 9222 });
+server.getSources();                          // [{ id, kind, label, udid, state }]
 // ... later
 server.stop();
 ```
+
+Sources (booted simulators, USB / Wi-Fi devices) are discovered
+continuously: a simulator booted or a device plugged in after the server
+starts shows up on its own, and a dropped connection is re-established with
+backoff. Each source is held over **one long-lived connection** shared by
+`startCdpServer()` and `listTargets()` in the same process; this keeps the
+simulator's `webinspectord_sim` from idle-exiting (it exits when its last
+client disconnects, and launchd then delays its restart by ~10 s).
+`listTargets()` waits (up to 15 s) for a source that is still connecting
+instead of returning an empty list, and keeps its connections warm for 30 s
+afterwards without keeping the process alive.
+
+Ids are stable and UDID-based: target ids look like
+`sim:<UDID>:<appId>:<pageId>` / `device:<UDID>:<appId>:<pageId>`, and
+`Target.udid` is the simulator's real UDID. (Versions up to 0.0.5 used the
+unstable `sim:<launchd pid>`.)
 
 ### CDP bridge — debug iOS pages with Chrome DevTools or VS Code
 
@@ -211,8 +228,12 @@ Three transports, one shared `_rpc_*` Web Inspector protocol:
 ### Simulator path
 
 `webinspectord_sim` listens on a launchd-managed Unix socket per booted
-runtime. We discover the active socket via `lsof -U` (the daemon process
-owns it) and connect directly. Same RPC, no TLS, no usbmux, no lockdown.
+simulator. Sockets of shut-down simulators are left behind, so a cheap
+`readdir` of `/private/var/tmp/com.apple.launchd.*` (every second) only
+triggers discovery; the socket is mapped to its simulator with
+`xcrun simctl list devices booted` + `xcrun simctl getenv <udid>
+RWI_LISTEN_SOCKET` (`lsof -U` is the fallback when `simctl` is missing). We
+connect directly: same RPC, no TLS, no usbmux, no lockdown.
 
 ### Desktop Safari (not supported)
 
@@ -232,12 +253,21 @@ src/
   usbmux.ts        /var/run/usbmuxd: ListDevices, ReadPairRecord, Connect
   lockdown.ts      plist-frame protocol + TLS upgrade with pair record
   webinspector.ts  shared _rpc_* RPC (works for device & simulator)
-  sim.ts           lsof-based discovery of webinspectord_sim sockets
+  sim.ts           Unix-socket transport to webinspectord_sim
+  core/
+    source-manager.ts  long-lived connection per source, state machine
+                       (connecting → ready → closed → backoff), shared
+                       by startCdpServer() and listTargets()
+    sim-discovery.ts   booted simulators → sockets (readdir + simctl)
+    device-discovery.ts usbmuxd ListDevices + Listen (hot-plug), USB/Wi-Fi dedupe
   cdp/
     server.ts      Bun.serve HTTP+WS on :9222; /json/list, /devtools/page/<id>
     target.ts      per-session class — wraps WIR forwardSocket; handles
-                   target-based mode (Target.{send,dispatch}MessageFromTarget,
-                   didCommitProvisionalTarget on cross-origin nav)
+                   target-based mode (Target.{send,dispatch}MessageFromTarget
+                   in their own id space; inner-target state machine for
+                   created / destroyed / provisional-commit, with state
+                   replay onto the new target). Client request ids must be
+                   non-negative: negative ids are reserved for the bridge.
     ios-protocol.ts thin orchestrator that wires per-domain filters
     domain.ts      shared helpers (swallowWith, DomainCtx)
     domains/*.ts   one file per CDP domain (Runtime, Debugger, DOM, CSS, …)
