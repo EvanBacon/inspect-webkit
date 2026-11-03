@@ -104,6 +104,7 @@ async function run(data: Uint8Array): Promise<void> {
   }
   const maxRedirects = b.int(0, 3);
   const calls: Array<{ url: URL; address: string; headers: Record<string, string> }> = [];
+  let answered = 0; // requests that got a response (one per hop)
   const deps: RefetchDeps = {
     async lookup() {
       const n = b.int(0, 3);
@@ -117,6 +118,7 @@ async function run(data: Uint8Array): Promise<void> {
     async request(r) {
       calls.push({ url: new URL(r.url.href), address: r.address, headers: { ...r.headers } });
       if (b.u8() % 7 === 0) throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+      answered++;
       const status = b.pick([200, 301, 302, 303, 307, 308, 404]);
       const h: Record<string, string> = { "content-type": "text/plain" };
       if (status >= 300 && status < 400 && b.u8() % 5 !== 0) {
@@ -138,7 +140,9 @@ async function run(data: Uint8Array): Promise<void> {
   void outcome;
 
   if (policy === "off") check(calls.length === 0, "re-fetch connected with policy off");
-  check(calls.length <= maxRedirects + 1 + 3, `${calls.length} requests for ${maxRedirects} redirects`);
+  // One answered request per hop; a refused connection moves on to the hop's next address (≤ 3 per hop).
+  check(answered <= maxRedirects + 1, `${answered} hops for maxRedirects ${maxRedirects}`);
+  check(calls.length <= (maxRedirects + 1) * 3, `${calls.length} connections for maxRedirects ${maxRedirects}`);
   let first: string | null = null;
   try {
     first = new URL(url).origin;
