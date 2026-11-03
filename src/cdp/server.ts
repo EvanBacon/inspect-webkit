@@ -45,6 +45,7 @@ import {
   safeDecode,
 } from "./http";
 import { attachBrowserWs, type PageSessionHandle } from "./browser-endpoint";
+import { isPlistDict, parseApp, parseListing, type WIApplication, type WIListedPage } from "../webinspector";
 import { capture } from "../capture";
 
 export type { Source } from "../core/source-manager";
@@ -151,10 +152,10 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
   const sources = new Set<Source>();
 
   // listing cache: continuously refreshed from each source's WI client.
-  const listingsByApp = new Map<string, Map<string, any>>();
+  const listingsByApp = new Map<string, Map<string, WIListedPage>>();
   // Track sources that have requested per-app listing notifications already.
   const subscribedAppsBySource = new WeakMap<Source, Set<string>>();
-  let appsBySource = new Map<Source, any[]>();
+  let appsBySource = new Map<Source, ServerApp[]>();
 
   // One PageChannel per attached page (targetId → record), so source/app/
   // page loss can tear down every client on it.
@@ -222,13 +223,8 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       if (!sel || !arg) return;
 
       if (sel === "_rpc_reportConnectedApplicationList:") {
-        const dict = (arg.WIRApplicationDictionaryKey as Record<string, any>) ?? {};
-        const apps = Object.entries(dict).map(([appId, a]) => ({
-          appId,
-          bundleId: a.WIRApplicationBundleIdentifierKey,
-          name: a.WIRApplicationNameKey ?? a.WIRApplicationBundleIdentifierKey ?? appId,
-          isProxy: Boolean(a.WIRIsApplicationProxyKey),
-        }));
+        const dict = isPlistDict(arg.WIRApplicationDictionaryKey) ? arg.WIRApplicationDictionaryKey : {};
+        const apps = Object.entries(dict).map(([appId, raw]) => serverApp(parseApp(appId, raw)));
         const prev = appsBySource.get(src) ?? [];
         appsBySource.set(src, apps);
         const subs = subscribedAppsBySource.get(src)!;
@@ -248,56 +244,40 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
           src.wi.send("_rpc_forwardGetListing:", { WIRApplicationIdentifierKey: a.appId });
         }
       } else if (sel === "_rpc_applicationConnected:") {
-        const a = arg;
+        const appId = arg.WIRApplicationIdentifierKey;
+        if (typeof appId !== "string") return;
+        const a = serverApp(parseApp(appId, arg));
         const apps = appsBySource.get(src) ?? [];
-        if (!apps.find((x) => x.appId === a.WIRApplicationIdentifierKey)) {
-          apps.push({
-            appId: a.WIRApplicationIdentifierKey,
-            bundleId: a.WIRApplicationBundleIdentifierKey,
-            name: a.WIRApplicationNameKey ?? a.WIRApplicationBundleIdentifierKey,
-            isProxy: Boolean(a.WIRIsApplicationProxyKey),
-          });
+        if (!apps.find((x) => x.appId === appId)) {
+          apps.push(a);
           appsBySource.set(src, apps);
         }
-        if (!a.WIRIsApplicationProxyKey) {
+        if (!a.isProxy) {
           const subs = subscribedAppsBySource.get(src)!;
-          if (!subs.has(a.WIRApplicationIdentifierKey)) {
-            subs.add(a.WIRApplicationIdentifierKey);
-            src.wi.send("_rpc_forwardGetListing:", {
-              WIRApplicationIdentifierKey: a.WIRApplicationIdentifierKey,
-            });
+          if (!subs.has(appId)) {
+            subs.add(appId);
+            src.wi.send("_rpc_forwardGetListing:", { WIRApplicationIdentifierKey: appId });
           }
         }
       } else if (sel === "_rpc_applicationDisconnected:") {
+        const appId = arg.WIRApplicationIdentifierKey;
+        if (typeof appId !== "string") return;
         const apps = appsBySource.get(src) ?? [];
         appsBySource.set(
           src,
-          apps.filter((x) => x.appId !== arg.WIRApplicationIdentifierKey),
+          apps.filter((x) => x.appId !== appId),
         );
-        listingsByApp.delete(`${src.id}:${arg.WIRApplicationIdentifierKey}`);
-        subscribedAppsBySource.get(src)?.delete(arg.WIRApplicationIdentifierKey);
+        listingsByApp.delete(`${src.id}:${appId}`);
+        subscribedAppsBySource.get(src)?.delete(appId);
         terminateSessions(
-          (s) => s.source === src && s.appId === arg.WIRApplicationIdentifierKey,
+          (s) => s.source === src && s.appId === appId,
           "application disconnected",
         );
       } else if (sel === "_rpc_applicationSentListing:") {
-        const appId = arg.WIRApplicationIdentifierKey as string;
-        const listing = (arg.WIRListingKey as Record<string, any>) ?? {};
-        const map = new Map<string, any>();
-        for (const [k, p] of Object.entries(listing)) {
-          map.set(k, {
-            pageId: Number(p.WIRPageIdentifierKey ?? 0),
-            title: p.WIRTitleKey ?? "",
-            url: p.WIRURLKey ?? "",
-            type: p.WIRTypeKey ?? "",
-            // WIR sets WIRConnectionIdentifierKey on a page once any inspector
-            // (Safari Develop menu, chrome://inspect, our own bridge, ...)
-            // attaches. Empty/missing → no debugger attached.
-            connectionId: typeof p.WIRConnectionIdentifierKey === "string"
-              ? p.WIRConnectionIdentifierKey
-              : null,
-          });
-        }
+        const appId = arg.WIRApplicationIdentifierKey;
+        if (typeof appId !== "string") return;
+        const map = new Map<string, WIListedPage>();
+        for (const p of parseListing(arg.WIRListingKey)) map.set(String(p.pageId), p);
         listingsByApp.set(`${src.id}:${appId}`, map);
         notePageListing(src, appId, map);
       }
@@ -337,7 +317,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
   }
 
   /** Close sessions whose page has dropped out of its app's listing. */
-  function notePageListing(src: Source, appId: string, listing: Map<string, any>) {
+  function notePageListing(src: Source, appId: string, listing: Map<string, WIListedPage>) {
     const present = new Set<number>();
     for (const p of listing.values()) present.add(p.pageId);
     const now = Date.now();
@@ -771,6 +751,12 @@ function closeWs(ws: WSWebSocket, code: number, reason: string): void {
   try {
     ws.terminate();
   } catch {}
+}
+
+type ServerApp = { appId: string; bundleId?: string; name: string; isProxy: boolean };
+
+function serverApp(a: WIApplication): ServerApp {
+  return { appId: a.appId, bundleId: a.bundleId, name: a.name ?? a.bundleId ?? a.appId, isProxy: a.isProxy };
 }
 
 function mapWIRType(t: string): string {

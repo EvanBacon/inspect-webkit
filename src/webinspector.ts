@@ -79,16 +79,50 @@ function uuid(): string {
 export type WIMessage = Record<string, PlistValue>;
 type Subscriber = (m: WIMessage) => void;
 
-function parseApp(appId: string, raw: PlistValue): WIApplication {
-  const a = (raw && typeof raw === "object" ? raw : {}) as Record<string, PlistValue>;
+// Everything below comes from the daemon: type-check each field. Decoded
+// dicts are prototype-less, so `Number(dict)` or `${dict}` would throw.
+const str = (v: PlistValue | undefined): string | undefined => (typeof v === "string" ? v : undefined);
+const flag = (v: PlistValue | undefined): boolean => v === true || v === 1;
+
+export function isPlistDict(v: unknown): v is Record<string, PlistValue> {
+  return v !== null && typeof v === "object" && !Array.isArray(v) && !(v instanceof Uint8Array) && !(v instanceof Date);
+}
+
+export function parseApp(appId: string, raw: PlistValue | undefined): WIApplication {
+  const a = isPlistDict(raw) ? raw : {};
   return {
     appId,
-    bundleId: a.WIRApplicationBundleIdentifierKey as string | undefined,
-    name: a.WIRApplicationNameKey as string | undefined,
-    isProxy: Boolean(a.WIRIsApplicationProxyKey),
-    isActive: Boolean(a.WIRIsApplicationActiveKey),
-    hostAppId: a.WIRHostApplicationIdentifierKey as string | undefined,
+    bundleId: str(a.WIRApplicationBundleIdentifierKey),
+    name: str(a.WIRApplicationNameKey),
+    isProxy: flag(a.WIRIsApplicationProxyKey),
+    isActive: flag(a.WIRIsApplicationActiveKey),
+    hostAppId: str(a.WIRHostApplicationIdentifierKey),
   };
+}
+
+export type WIListedPage = WIPage & {
+  /** Set by WIR once any inspector attaches to the page; null when none. */
+  connectionId: string | null;
+};
+
+/** The pages of a WIRListingKey dict. Entries without an integer page id
+ *  are skipped; non-string title / url / type read as "". */
+export function parseListing(raw: PlistValue | undefined): WIListedPage[] {
+  if (!isPlistDict(raw)) return [];
+  const pages: WIListedPage[] = [];
+  for (const p of Object.values(raw)) {
+    if (!isPlistDict(p)) continue;
+    const id = p.WIRPageIdentifierKey;
+    if (typeof id !== "number" || !Number.isSafeInteger(id)) continue;
+    pages.push({
+      pageId: id,
+      title: str(p.WIRTitleKey) ?? "",
+      url: str(p.WIRURLKey) ?? "",
+      type: str(p.WIRTypeKey) ?? "",
+      connectionId: str(p.WIRConnectionIdentifierKey) || null,
+    });
+  }
+  return pages;
 }
 
 export class WebInspectorClient {
@@ -267,18 +301,7 @@ export class WebInspectorClient {
     ).catch(() => null);
     if (!m) return [];
     const arg = m.__argument as Record<string, PlistValue>;
-    const listing = (arg.WIRListingKey as Record<string, PlistValue>) ?? {};
-    const pages: WIPage[] = [];
-    for (const raw of Object.values(listing)) {
-      const p = raw as Record<string, PlistValue>;
-      pages.push({
-        pageId: Number(p.WIRPageIdentifierKey ?? 0),
-        title: (p.WIRTitleKey as string) ?? "",
-        url: (p.WIRURLKey as string) ?? "",
-        type: (p.WIRTypeKey as string) ?? "",
-      });
-    }
-    return pages;
+    return parseListing(arg.WIRListingKey).map(({ pageId, title, url, type }) => ({ pageId, title, url, type }));
   }
 
   get connection() {

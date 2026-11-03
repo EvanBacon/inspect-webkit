@@ -425,8 +425,10 @@ export function createCdpHttpServer(
 }
 
 function sendJson(res: http.ServerResponse, body: unknown, status = 200): void {
+  // Serialize first: a failure must still be able to answer 500.
+  const text = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(body));
+  res.end(text);
 }
 
 function sendIndexHtml(
