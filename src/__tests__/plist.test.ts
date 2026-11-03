@@ -65,3 +65,17 @@ test.skipIf(!existsSync("/tmp/test.bplist"))("bplist00 — decode real plutil-ge
   // dispatcher
   expect(decode(buf)).toEqual(decodeBinary(buf));
 });
+
+test("data round-trips through XML base64 (all byte values, large)", () => {
+  const bytes = new Uint8Array(300_001);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 7919) & 0xff;
+  const xml = encodeXml({ d: bytes });
+  const back = decodeXml(xml) as { d: Uint8Array };
+  expect(back.d instanceof Uint8Array).toBe(true);
+  expect(back.d.length).toBe(bytes.length);
+  expect(Buffer.from(back.d).equals(Buffer.from(bytes))).toBe(true);
+  // A subarray view must encode only its own bytes.
+  const view = bytes.subarray(10, 20);
+  const v = decodeXml(encodeXml({ d: view })) as { d: Uint8Array };
+  expect(Array.from(v.d)).toEqual(Array.from(view));
+});
