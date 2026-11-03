@@ -28,9 +28,23 @@ export type ServiceDescriptor = {
   service: string;
 };
 
-async function readFrame(stream: ByteStream): Promise<Record<string, PlistValue>> {
+/** Lockdown replies are small plists; anything bigger is bogus. */
+export const MAX_LOCKDOWN_FRAME = 16 * 1024 * 1024;
+
+/** @internal exported for tests. Destroys `socket` on a malformed length. */
+export async function readFrame(
+  stream: ByteStream,
+  socket?: { destroy(): void },
+): Promise<Record<string, PlistValue>> {
   const lenBuf = await stream.read(4);
   const len = new DataView(lenBuf.buffer, lenBuf.byteOffset, 4).getUint32(0, false);
+  if (len > MAX_LOCKDOWN_FRAME) {
+    try {
+      socket?.destroy();
+    } catch {}
+    stream.close(new Error(`bad lockdown frame length ${len}`));
+    throw new Error(`bad lockdown frame length ${len}`);
+  }
   const body = await stream.read(len);
   return decodeXml(body) as Record<string, PlistValue>;
 }
@@ -39,8 +53,10 @@ function writeFrame(socket: AnySocket, payload: Record<string, PlistValue>) {
   const body = encodeXml({ Label: "inspect-webkit", ...payload });
   const header = new Uint8Array(4);
   new DataView(header.buffer).setUint32(0, body.length, false);
-  socket.write(header);
-  socket.write(body);
+  const out = Buffer.allocUnsafe(4 + body.length);
+  out.set(header, 0);
+  out.set(body, 4);
+  socket.write(out);
 }
 
 function expect(reply: Record<string, PlistValue>, request: string) {
@@ -110,7 +126,7 @@ export class LockdownClient {
     );
     debug("sending QueryType");
     writeFrame(socket, { Request: "QueryType" });
-    const r = await readFrame(stream);
+    const r = await readFrame(stream, socket);
     debug("QueryType reply:", r);
     expect(r, "QueryType");
     if (r.Type !== "com.apple.mobile.lockdown") {
@@ -126,7 +142,7 @@ export class LockdownClient {
       HostID: this.pair.HostID,
       SystemBUID: this.pair.SystemBUID,
     });
-    const r = await readFrame(this.stream);
+    const r = await readFrame(this.stream, this.socket);
     debug("StartSession reply:", r);
     expect(r, "StartSession");
     if (r.EnableSessionSSL) {
@@ -142,7 +158,7 @@ export class LockdownClient {
   async startService(name: string): Promise<ServiceDescriptor> {
     debug("StartService", name);
     writeFrame(this.socket, { Request: "StartService", Service: name });
-    const r = await readFrame(this.stream);
+    const r = await readFrame(this.stream, this.socket);
     debug("StartService reply:", r);
     expect(r, "StartService");
     return {
