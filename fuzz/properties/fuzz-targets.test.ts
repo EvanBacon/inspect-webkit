@@ -30,6 +30,7 @@ const TARGETS: Array<[string, number]> = [
   ["page-channel", 100],
   ["wir-server", 100],
   ["front-door", 150],
+  ["browser-endpoint", 300],
 ];
 
 afterAll(() => restoreConsole());

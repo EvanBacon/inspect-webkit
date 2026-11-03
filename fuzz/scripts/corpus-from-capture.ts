@@ -166,6 +166,10 @@ for (const ls of bySender.values()) {
   }
 }
 
+// browser-endpoint: the browser-scope client frames, verbatim.
+const browserIn = recs.filter((r) => r.k === "cdp-in" && r.s?.startsWith("browser")).map((r) => "T" + r.text);
+for (let i = 0; i < browserIn.length; i += 4) put("browser-endpoint", browserIn.slice(i, i + 8).join("\n"));
+
 // --- front door ------------------------------------------------------------
 for (const p of ["/json/list", "/json", "/json/version", "/json/protocol", "/", "/devtools/page/sim:fuzz:PID:1:1", "/devtools/browser/x"]) {
   put("front-door", `G ${p}\nH 127.0.0.1:9222`);

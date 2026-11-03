@@ -1,0 +1,8 @@
+T{"id":1,"method":"Target.setDiscoverTargets","params":{"discover":true}}
+T{"id":2,"method":"Target.getTargets","params":{}}
+T{"id":3,"method":"Browser.getVersion","params":{}}
+T{"id":4,"method":"Target.attachToTarget","params":{"targetId":"sim:2DD68D49-7354-48AC-A4AF-C6B4462BF6B7:PID:45656:1","flatten":true}}
+T{"id":5,"method":"Runtime.enable","params":{},"sessionId":"7b970c13-9f2d-42dd-9593-b6502cda13bd"}
+T{"id":6,"method":"Runtime.evaluate","params":{"expression":"location.href"},"sessionId":"7b970c13-9f2d-42dd-9593-b6502cda13bd"}
+T{"id":7,"method":"Target.detachFromTarget","params":{"sessionId":"7b970c13-9f2d-42dd-9593-b6502cda13bd"}}
+T{"id":8,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":false,"flatten":true}}
