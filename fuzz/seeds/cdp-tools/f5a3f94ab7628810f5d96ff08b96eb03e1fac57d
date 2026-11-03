@@ -1,0 +1,16 @@
+MT{"method":"Network.setBlockedURLs","params":{"urls":["*.png"]}}
+T{"method":"Network.clearBrowserCache","params":{}}
+T{"method":"Network.loadNetworkResource","params":{"frameId":"","url":"https://example.com/","options":{"disableCache":false,"includeCredentials":false}}}
+T{"method":"Debugger.setBreakpointByUrl","params":{"lineNumber":0,"urlRegex":"cap-bp\\.js","columnNumber":0,"condition":""}}
+T{"method":"Debugger.setBreakpointByUrl","params":{"lineNumber":1,"url":"https://example.com/cap.js"}}
+T{"method":"Debugger.setPauseOnExceptions","params":{"state":"uncaught"}}
+T{"method":"Debugger.setBreakpointsActive","params":{"active":true}}
+T{"method":"Runtime.evaluate","params":{"expression":"setTimeout(function capPause(){ var a = 1; debugger; a++; return a }, 0)"}}
+T{"method":"Debugger.evaluateOnCallFrame","params":{"callFrameId":"{\"ordinal\":0,\"injectedScriptId\":14}","expression":"a","returnByValue":true}}
+T{"method":"Runtime.getProperties","params":{"objectId":"{\"injectedScriptId\":14,\"id\":35}","ownProperties":false}}
+T{"method":"Runtime.getProperties","params":{"objectId":"{\"injectedScriptId\":14,\"id\":36}","ownProperties":false}}
+T{"method":"Runtime.getProperties","params":{"objectId":"{\"injectedScriptId\":14,\"id\":37}","ownProperties":false}}
+T{"method":"Runtime.getProperties","params":{"objectId":"{\"injectedScriptId\":14,\"id\":38}","ownProperties":false}}
+T{"method":"Debugger.getScriptSource","params":{"scriptId":"32"}}
+T{"method":"Debugger.getPossibleBreakpoints","params":{"start":{"scriptId":"32","lineNumber":0,"columnNumber":43},"restrictToFunction":false}}
+T{"method":"Debugger.stepOver","params":{}}

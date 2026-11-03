@@ -1,0 +1,16 @@
+CT{"method":"Debugger.stepInto","params":{}}
+T{"method":"Debugger.resume","params":{}}
+T{"method":"Debugger.removeBreakpoint","params":{"breakpointId":"https://example.com/cap.js:1:0"}}
+T{"method":"Debugger.setPauseOnExceptions","params":{"state":"none"}}
+T{"method":"Debugger.setSkipAllPauses","params":{"skip":false}}
+T{"method":"Debugger.searchInContent","params":{"scriptId":"1","query":"a"}}
+T{"method":"Page.navigate","params":{"url":"https://www.iana.org/help/example-domains"}}
+T{"method":"Runtime.evaluate","params":{"expression":"document.title","returnByValue":true}}
+T{"method":"DOM.getDocument","params":{"depth":-1,"pierce":true}}
+T{"method":"DOM.querySelector","params":{"nodeId":1,"selector":"h1"}}
+T{"method":"DOM.querySelectorAll","params":{"nodeId":1,"selector":"p, a"}}
+T{"method":"DOM.requestChildNodes","params":{"nodeId":1,"depth":2}}
+T{"method":"DOM.getOuterHTML","params":{"nodeId":16}}
+T{"method":"DOM.getBoxModel","params":{"nodeId":16}}
+T{"method":"DOM.describeNode","params":{"nodeId":16}}
+T{"method":"DOM.setAttributeValue","params":{"nodeId":16,"name":"data-cap","value":"1"}}

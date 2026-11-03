@@ -1,0 +1,12 @@
+{
+  "name": "inspect-webkit-fuzz",
+  "private": true,
+  "description": "Coverage-guided fuzzing (jazzer.js) for inspect-webkit. Not published.",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "fuzz": "bun scripts/run.ts"
+  },
+  "devDependencies": {
+    "@jazzer.js/core": "4.0.0"
+  }
+}

@@ -16,6 +16,7 @@
 
 import { test, expect } from "bun:test";
 import fc from "fast-check";
+import { fcRuns, fcTimeout } from "../../__tests__/helpers/fc-runs";
 import { PageChannel } from "../page-channel";
 import { Target } from "../target";
 
@@ -340,6 +341,6 @@ test("N clients share a page: one reply per request on its sender, domains refco
       const problems = await runScenario(actions);
       expect(problems).toEqual([]);
     }),
-    { numRuns: 300 },
+    { numRuns: fcRuns(300) },
   );
-}, 60_000);
+}, fcTimeout(60_000));

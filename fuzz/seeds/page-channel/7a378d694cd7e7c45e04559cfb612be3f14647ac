@@ -1,0 +1,8 @@
+CR{"m":"Runtie.evaluate","result":{"result":{"type":"undefined"},"wasThrown":false}}
+R{"m":"Console.clearMessages","result":{}}
+W{"method":"Console.messageRepeatCountUpdated","params":{"count":2,"timestamp":1793738898.10412}}
+W{"method":"Console.messageRepeatCountUpdated","params":{"count":3,"timestamp":1793738898.104127}}
+W{"method":"Console.messageRepeatCountUpdated","params":{"count":4,"timestamp":1793738898.10413}}
+W{"method":"Console.messageRepeatCountUpdated","params":{"count":5,"timestamp":1793738898.104133}}
+2T{"method":"Console.clearMessages","params":{}}
+W{"method":"Console.messagesCleared","params":{"reason":"frontend"}}

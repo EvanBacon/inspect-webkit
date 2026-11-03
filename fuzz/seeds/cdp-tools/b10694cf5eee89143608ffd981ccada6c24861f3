@@ -1,0 +1,16 @@
+ST{"method":"DOM.setAttributesAsText","params":{"nodeId":16,"text":"title=\"t\" data-x=\"y\""}}
+T{"method":"DOM.removeAttribute","params":{"nodeId":16,"name":"data-x"}}
+T{"method":"DOM.resolveNode","params":{"nodeId":16,"objectGroup":"dom"}}
+T{"method":"DOM.pushNodesByBackendIdsToFrontend","params":{"backendNodeIds":[16]}}
+T{"method":"Overlay.highlightNode","params":{"nodeId":16,"highlightConfig":{"showInfo":true,"contentColor":{"r":1,"g":2,"b":3,"a":0.5}}}}
+T{"method":"Overlay.hideHighlight","params":{}}
+T{"method":"DOM.setInspectedNode","params":{"nodeId":16}}
+T{"method":"CSS.getMatchedStylesForNode","params":{"nodeId":16}}
+T{"method":"CSS.getComputedStyleForNode","params":{"nodeId":16}}
+T{"method":"CSS.getInlineStylesForNode","params":{"nodeId":16}}
+T{"method":"CSS.getPlatformFontsForNode","params":{"nodeId":16}}
+T{"method":"CSS.forcePseudoState","params":{"nodeId":16,"forcedPseudoClasses":["hover"]}}
+T{"method":"CSS.setStyleTexts","params":{"edits":[{"styleSheetId":"1","range":{"startLine":1,"startColumn":0,"endLine":1,"endColumn":0},"text":"color: red;"}]}}
+T{"method":"DOM.setNodeValue","params":{"nodeId":16,"value":"x"}}
+T{"method":"DOM.getAttributes","params":{"nodeId":16}}
+T{"method":"CSS.createStyleSheet","params":{"frameId":""}}

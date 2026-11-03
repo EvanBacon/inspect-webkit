@@ -1,0 +1,12 @@
+CR{nablg","result":{}}
+R{"m":"Network.setResourceCachingDisabled","result":{}}
+R{"m":"Debugger.setBreakpointByUrl","result":{"breakpointId":"/cap-bp\\.js/:0:0","locations":[]}}
+R{"m":"Debugger.setBreakpointsAcreakpointsActive","params":{"active":true}}
+0T{"method":"Debugger.setPauseOnDebuggerStatements","params":{"enabled":true}}
+W{"method":"Page.defaultUserPreferencesDidChange","params":{"preferences":[{"name":"PrefersReducedMotion","value":"NoPreference"},{"name":"PrefersContrast","value":"NoPreference"},{"name":"PrefersColorScheme","value":"Light"}]}}
+W{"method":"Runtime.executionContextCreated","params":{"contexp":{"id":1,"type":"normal","name":"","frameId":"0.2"}}}
+W{"method":"Target.targetDestroyed","params":{"targetId":"page-130"}}
+W{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-134","type":"page","isProvisional":true}}}
+0T{"method":"Network.enable","params":{"maxPostDataSize":65536}}
+1T{"method":"Page.enable","params":{}}
+2T{"method":"Runtime.enable","params":{}}

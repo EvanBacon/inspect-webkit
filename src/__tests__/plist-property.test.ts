@@ -6,6 +6,7 @@
 
 import { test, expect } from "bun:test";
 import fc from "fast-check";
+import { fcRuns, fcTimeout } from "./helpers/fc-runs";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -73,9 +74,9 @@ test("encodeXml → decodeXml round-trips arbitrary values", () => {
     fc.property(value, (v) => {
       expect(norm(decodeXml(encodeXml(v)))).toEqual(norm(v));
     }),
-    { numRuns: 400 },
+    { numRuns: fcRuns(400) },
   );
-});
+}, fcTimeout(5_000));
 
 const hasPlutil = spawnSync("plutil", ["-help"]).error === undefined && process.platform === "darwin";
 
@@ -148,6 +149,6 @@ test("mutated inputs return a value or throw PlistError — never anything else,
       }
       expect(performance.now() - t0).toBeLessThan(250);
     }),
-    { numRuns: 3000 },
+    { numRuns: fcRuns(3000) },
   );
-});
+}, fcTimeout(5_000));

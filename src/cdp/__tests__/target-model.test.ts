@@ -10,6 +10,7 @@
 
 import { test, expect } from "bun:test";
 import fc from "fast-check";
+import { fcRuns, fcTimeout } from "../../__tests__/helpers/fc-runs";
 import { Target } from "../target";
 
 type Action =
@@ -187,6 +188,6 @@ test("every request is answered exactly once under arbitrary orderings (fast-che
       expect(s.toolRequests).toBe(0);
       t.close();
     }),
-    { numRuns: 300 },
+    { numRuns: fcRuns(300) },
   );
-}, 30_000);
+}, fcTimeout(30_000));

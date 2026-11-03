@@ -1,0 +1,16 @@
+WT{"method":"DOM.getSearchResults","params":{"searchId":"0.6","fromIndex":0,"toIndex":1}}
+T{"method":"DOM.discardSearchResults","params":{"searchId":"0.6"}}
+T{"method":"DOM.setInspectMode","params":{"mode":"searchForNode","highlightConfig":{}}}
+T{"method":"Overlay.setInspectMode","params":{"mode":"none","highlightConfig":{}}}
+T{"method":"Accessibility.getPartialAXTree","params":{"nodeId":1,"fetchRelatives":true}}
+T{"method":"DOMDebugger.getEventListeners","params":{"objectId":"x"}}
+T{"method":"DOMDebugger.setDOMBreakpoint","params":{"nodeId":1,"type":"subtree-modified"}}
+T{"method":"DOMDebugger.removeDOMBreakpoint","params":{"nodeId":1,"type":"subtree-modified"}}
+T{"method":"DOM.undo","params":{}}
+T{"method":"Runtime.evaluate","params":{"expression":"fetch(location.href + '?cap=' + Date.now(), {headers:{'x-cap':'1'}}).then(r => r.text()).then(t => t.length)","awaitPromise":true,"returnByValue":true}}
+T{"method":"Network.getResponseBody","params":{"requestId":"0.448"}}
+T{"method":"Network.getCookies","params":{"urls":["https://example.com/"]}}
+T{"method":"Network.setCacheDisabled","params":{"cacheDisabled":true}}
+T{"method":"Network.setExtraHTTPHeaders","params":{"headers":{"x-cap":"2"}}}
+T{"method":"Network.setUserAgentOverride","params":{"userAgent":"cap/1"}}
+T{"method":"Network.emulateNetworkConditions","params":{"offline":false,"latency":0,"downloadThroughput":-1,"uploadThroughput":-1}}

@@ -1,0 +1,9 @@
+WT{"method":"Emulation.clearDeviceMetricsOverride","params":{}}
+T{"method":"Browser.getVersion","params":{}}
+T{"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":0,"y":0,"button":"none"}}
+T{"method":"IO.read","params":{"handle":"no-such-handle"}}
+T{"method":"IO.close","params":{"handle":"no-such-handle"}}
+T{"method":"Accessibility.enable","params":{}}
+T{"method":"Accessibility.getPartialAXTree","params":{"backendNodeId":1}}
+T{"method":"Emulation.setUserAgentOverride","params":{"userAgent":"inspect-webkit-probe/2"}}
+T{"method":"Network.loadNetworkResource","params":{"frameId":"0.1","url":"https://example.com/","options":{"disableCache":false,"includeCredentials":false}}}

@@ -1,0 +1,24 @@
+QR{"m":"DOM.setNodeValue","error":{"code":-32000,"message":"Node for given nodeId is not text","data":[{"code":-32000,"message":"Node for given nodeId is not text"}]}}
+R{"m":"DOM.getAttributes","result":{"attributes":["id","example-domains","data-cap","1","title","t","style","color: red;"]}}
+R{"m":"CSS.createStyleSheet","error":{"code":-32000,"message":"Missing frame for given frameId","data":[{"code":-32000,"message":"Missing frame for given frameId"}]}}
+R{"m":"CSS.getStyleSheetText","error":{"code":-32000,"message":"Missing style sheet for given styleSheetId","data":[{"code":-32000,"message":"Missing style sheet for given styleSheetId"}]}}
+R{"m":"CSS.addRule","error":{"code":-32000,"message":"Missing style sheet for given styleSheetId","data":[{"code":-32000,"message":"Missing style sheet for given styleSheetId"}]}}
+R{"m":"CSS.getMediaQueries","error":{"code":-32601,"message":"'CSS.getMediaQueries' was not found","data":[{"code":-32601,"message":"'CSS.getMediaQueries' was not found"}]}}
+R{"m":"DOM.performSearch","result":{"searchId":"0.3","resultCount":1}}
+R{"m":"DOM.getSearchResults","result":{"nodeIds":[16]}}
+R{"m":"DOM.discardSearchResults","result":{}}
+R{"m":"DOM.setInspectModeEnabled","error":{"code":-32000,"message":"Internal error: highlight configuration parameter is missing","data":[{"code":-32000,"message":"Internal error: highlight configuration parameter is missing"}]}}
+R{"m":"DOM.setInspectModeEnabled","result":{}}
+W{"method":"DOM.inlineStyleInvalidated","params":{"nodeIds":[16]}}
+T{"method":"DOM.setNodeValue","params":{"nodeId":16,"value":"x"}}
+T{"method":"DOM.getAttributes","params":{"nodeId":16}}
+T{"method":"CSS.createStyleSheet","params":{"frameId":""}}
+T{"method":"CSS.getStyleSheetText","params":{"styleSheetId":"0"}}
+T{"method":"CSS.addRule","params":{"contextNodeId":16,"styleSheetId":"0","selector":"h1 { outline: 1px solid red }"}}
+T{"method":"CSS.getMediaQueries","params":{}}
+T{"method":"DOM.performSearch","params":{"query":"h1","caseSensitive":false}}
+T{"method":"DOM.getSearchResults","params":{"searchId":"0.3","fromIndex":0,"toIndex":1}}
+T{"method":"DOM.discardSearchResults","params":{"searchId":"0.3"}}
+T{"method":"DOM.setInspectModeEnabled","params":{"enabled":true}}
+T{"method":"DOM.setInspectModeEnabled","params":{"enabled":false,"highlightConfig":{}}}
+T{"method":"DOM.requestNode","params":{"objectId":"x"}}

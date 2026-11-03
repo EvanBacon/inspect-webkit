@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>__selector</key>
+	<string>_rpc_reportIdentifier:</string>
+	<key>__argument</key>
+	<dict>
+		<key>WIRConnectionIdentifierKey</key>
+		<string>c1b127dd-c185-4782-b0a4-6b5f8b77eb22</string>
+	</dict>
+</dict>
+</plist>

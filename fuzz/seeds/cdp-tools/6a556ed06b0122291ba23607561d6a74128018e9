@@ -1,0 +1,16 @@
+GT{"method":"CSS.setStyleTexts","params":{"edits":[]}}
+T{"method":"CSS.addRule","params":{"styleSheetId":"0","ruleText":".dummy {}","location":{"startLine":0,"startColumn":0,"endLine":0,"endColumn":0}}}
+T{"method":"DOM.performSearch","params":{"query":"body"}}
+T{"method":"DOMDebugger.setEventListenerBreakpoint","params":{"eventName":"click"}}
+T{"method":"DOMDebugger.removeEventListenerBreakpoint","params":{"eventName":"click"}}
+T{"method":"DOMDebugger.setXHRBreakpoint","params":{"url":""}}
+T{"method":"DOMDebugger.removeXHRBreakpoint","params":{"url":""}}
+T{"method":"Runtime.setAsyncCallStackDepth","params":{"maxDepth":32}}
+T{"method":"Runtime.releaseObjectGroup","params":{"objectGroup":"console"}}
+T{"method":"Debugger.setAsyncCallStackDepth","params":{"maxDepth":32}}
+T{"method":"Debugger.setSkipAllPauses","params":{"skip":false}}
+T{"method":"Debugger.setBreakpointByUrl","params":{"lineNumber":0,"url":"about:blank"}}
+T{"method":"Overlay.enable","params":{}}
+T{"method":"Overlay.setShowPaintRects","params":{"result":false}}
+T{"method":"Overlay.hideHighlight","params":{}}
+T{"method":"Overlay.setInspectMode","params":{"mode":"none","highlightConfig":{}}}

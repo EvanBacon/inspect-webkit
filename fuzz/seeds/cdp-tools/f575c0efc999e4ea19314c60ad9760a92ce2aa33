@@ -1,0 +1,5 @@
+QT{"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":true,"flatten":true}}
+T{"method":"Runtime.runIfWaitingForDebugger","params":{}}
+T{"method":"Inspector.enable","params":{}}
+T{"method":"Accessibility.enable","params":{}}
+T{"method":"Runtime.evaluate","params":{"expression":"navigator.userAgent"}}
