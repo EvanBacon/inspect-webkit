@@ -45,7 +45,7 @@ async function run(data: Uint8Array): Promise<void> {
   let entries: BrowserEntry[] = [{ targetId: IDS[0]!, type: "page", title: "a", url: "https://a/" }];
   const handles: Handle[] = [];
   attachBrowserWs(ws as never, {
-    refreshMs: 5,
+    refreshMs: 1,
     listEntries: () => entries,
     createPageSession: (targetId, send, onServerClose) => {
       if (!entries.some((e) => e.targetId === targetId)) return null;
@@ -116,7 +116,7 @@ async function run(data: Uint8Array): Promise<void> {
         const live = handles.filter((h) => !h.closed);
         if (live.length) b.pick(live).onServerClose("page gone");
       } else {
-        await new Promise((r) => setTimeout(r, 6)); // a discovery pump
+        await new Promise((r) => setTimeout(r, 1)); // a discovery pump
       }
       await settle(1);
     }
