@@ -33,5 +33,5 @@ for (const t of targets) {
     for (const l of r.logs) console.error(l);
     process.exit(1);
   }
-  console.log(`built dist/${t}.cjs`);
+  console.log(`built dist/${t}.mjs`);
 }
