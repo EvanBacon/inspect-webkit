@@ -46,6 +46,18 @@ export type CdpMessage = {
 
 type Filter = (msg: CdpMessage) => Promise<CdpMessage | null>;
 
+/**
+ * Where a session's wire frames go. By default a Target owns its WIR sender
+ * and writes straight to it; a PageChannel substitutes a link so several
+ * sessions can share one sender (ids are rewritten there).
+ */
+export interface TargetLink {
+  /** A top-level frame (raw mode, or a Target.* command). */
+  send(m: CdpMessage): void;
+  /** `inner` wrapped in Target.sendMessageToTarget{targetId} with envelope id `outerId`. */
+  sendWrapped(outerId: number, targetId: string, inner: CdpMessage): void;
+}
+
 type Pending = {
   resolve: (v: any) => void;
   reject: (e: any) => void;
@@ -158,7 +170,13 @@ export class Target {
     public readonly appId: string,
     public readonly pageId: number,
     public readonly senderKey: string,
+    private link: TargetLink | null = null,
   ) {}
+
+  /** Route wire frames through `link` (a PageChannel) instead of `wi`. */
+  setLink(link: TargetLink): void {
+    this.link = link;
+  }
 
   addMessageFilter(method: string, filter: Filter) {
     let list = this.filters.get(method);
@@ -300,6 +318,13 @@ export class Target {
       return;
     }
     return this.deliverFromTarget(msg, rawMessage, false);
+  }
+
+  /** A frame already parsed by a PageChannel. `fromInner` marks the
+   *  unwrapped payload of a Target.dispatchMessageFromTarget. */
+  onParsedFromTarget(msg: CdpMessage, rawMessage: string, fromInner: boolean): Promise<void> {
+    if (this.closedReason !== null) return Promise.resolve();
+    return this.deliverFromTarget(msg, rawMessage, fromInner);
   }
 
   private async deliverFromTarget(
@@ -596,7 +621,10 @@ export class Target {
   private send(m: CdpMessage): void {
     if (this.closedReason !== null) return;
     const isTargetDomain = typeof m.method === "string" && m.method.startsWith("Target.");
-    if (isTargetDomain || this.mode === "raw") return this.writeFrame(JSON.stringify(m));
+    if (isTargetDomain || this.mode === "raw") {
+      if (this.link) return this.link.send(m);
+      return this.writeFrame(JSON.stringify(m));
+    }
     if (this.active) return this.wrapAndSend(m, this.active, true);
     this.enqueue(m);
   }
@@ -607,6 +635,10 @@ export class Target {
     this.envelopes.set(outerId, { innerId, targetId });
     if (innerId !== undefined) this.inFlight.set(innerId, { outerId, targetId });
     if (record) this.recordState(m, targetId);
+    if (this.link) {
+      if (this.closedReason === null) this.link.sendWrapped(outerId, targetId, m);
+      return;
+    }
     this.writeFrame(
       JSON.stringify({
         id: outerId,
