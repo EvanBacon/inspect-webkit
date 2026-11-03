@@ -17,14 +17,13 @@
 //   WebInspectorClient ("backend") per source open for the server's
 //   lifetime and reconnects with backoff. The server listens immediately
 //   and adds each source as it becomes ready. We periodically refresh each
-//   source's target listing. When a DevTools client opens
-//   a WS, we allocate a fresh WIRSenderKey, send forwardSocketSetup, and
-//   route _rpc_applicationSentData: frames whose WIRDestinationKey matches
-//   to that session's Target.
+//   source's target listing. Each inspected page gets one PageChannel (one
+//   WIRSenderKey / forwardSocketSetup), shared by every client on that page
+//   — DevTools WebSockets, browser-endpoint sessions, hover highlights —
+//   each with its own Target session (see page-channel.ts).
 
 import { WebSocketServer, type WebSocket as WSWebSocket } from "ws";
 import type { AddressInfo } from "node:net";
-import type { WIMessage } from "../webinspector";
 import {
   type Source,
   type SourceInfo,
@@ -33,6 +32,7 @@ import {
 } from "../core/source-manager";
 import { Target as CdpTarget } from "./target";
 import { installIOSFilters } from "./ios-protocol";
+import { PageChannel } from "./page-channel";
 import {
   type CdpServerBaseOptions,
   WS_MAX_PAYLOAD,
@@ -76,18 +76,15 @@ const PAGE_GONE_GRACE_MS = 1000;
 const CLOSE_INTERNAL = 1011;
 const CLOSE_GOING_AWAY = 1001;
 
-/** One bridge-owned WIR sender attached to a page. */
-type ActiveSession = {
-  kind: "page" | "browser" | "highlight";
+/** The shared WIR sender for one inspected page, and its listing misses. */
+type PageRecord = {
+  channel: PageChannel;
   source: Source;
   appId: string;
   pageId: number;
   targetId: string;
-  senderKey: string;
   misses: number;
   firstMissAt: number;
-  /** Server-initiated teardown: release the WIR sender and tell the client. */
-  terminate(reason: string, code?: number): void;
 };
 
 export type CdpServerOptions = CdpServerBaseOptions & {
@@ -118,8 +115,8 @@ export type CdpServer = {
   /**
    * Drop the cached hover-highlight session for a target (or all of them
    * when `targetId` is omitted). Hosts should call this when their picker
-   * closes so we don't keep a WIR connection alive that would block other
-   * debuggers from attaching.
+   * closes so we don't hold the page's inspector connection (and the
+   * "in use" mark Safari's Develop menu shows) longer than needed.
    */
   releaseHighlight(targetId?: string): void;
   /** Addresses the HTTP/WS server is listening on. */
@@ -153,23 +150,43 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
   const subscribedAppsBySource = new WeakMap<Source, Set<string>>();
   let appsBySource = new Map<Source, any[]>();
 
-  // Every bridge-owned WIR sender (DevTools WS, browser-endpoint session,
-  // hover-highlight session), so source/app/page loss can tear them down.
-  const activeSessions = new Set<ActiveSession>();
+  // One PageChannel per attached page (targetId → record), so source/app/
+  // page loss can tear down every client on it.
+  const pages = new Map<string, PageRecord>();
 
   function terminateSessions(
-    pred: (s: ActiveSession) => boolean,
+    pred: (p: PageRecord) => boolean,
     reason: string,
     code = CLOSE_INTERNAL,
   ): void {
-    for (const s of [...activeSessions]) {
-      if (!pred(s)) continue;
-      try {
-        s.terminate(reason, code);
-      } catch (e) {
-        console.error(`warn: session teardown failed: ${(e as Error)?.message ?? e}`);
+    for (const p of [...pages.values()]) {
+      if (!pred(p)) continue;
+      if (p.channel.clientCount > 0) {
+        console.error(`# devtools sessions closed (${reason}): ${p.targetId}`);
       }
+      p.channel.close(reason, code);
     }
+  }
+
+  /** The page's channel, created (not yet set up) if nobody is attached. */
+  function channelFor(entry: CdpTargetEntry): PageChannel {
+    const cur = pages.get(entry.targetId);
+    if (cur && cur.source === entry.source && !cur.channel.closed) return cur.channel;
+    const channel = new PageChannel(entry.source.wi, entry.appId, entry.pageId, {
+      onEmpty: () => {
+        if (pages.get(entry.targetId)?.channel === channel) pages.delete(entry.targetId);
+      },
+    });
+    pages.set(entry.targetId, {
+      channel,
+      source: entry.source,
+      appId: entry.appId,
+      pageId: entry.pageId,
+      targetId: entry.targetId,
+      misses: 0,
+      firstMissAt: 0,
+    });
+    return channel;
   }
 
   /** Per-source listener removers, so stop() detaches from sources that
@@ -318,15 +335,15 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     const present = new Set<number>();
     for (const p of listing.values()) present.add(p.pageId);
     const now = Date.now();
-    for (const s of [...activeSessions]) {
-      if (s.source !== src || s.appId !== appId) continue;
-      if (present.has(s.pageId)) {
-        s.misses = 0;
+    for (const p of [...pages.values()]) {
+      if (p.source !== src || p.appId !== appId) continue;
+      if (present.has(p.pageId)) {
+        p.misses = 0;
         continue;
       }
-      if (s.misses++ === 0) s.firstMissAt = now;
-      if (s.misses >= PAGE_GONE_MISSES && now - s.firstMissAt >= pageGoneGraceMs) {
-        s.terminate("inspected page is gone");
+      if (p.misses++ === 0) p.firstMissAt = now;
+      if (p.misses >= PAGE_GONE_MISSES && now - p.firstMissAt >= pageGoneGraceMs) {
+        terminateSessions((x) => x === p, "inspected page is gone");
       }
     }
   }
@@ -341,8 +358,6 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       }
     }
   }, REFRESH_MS);
-
-  const sessions = new Map<string, CdpTarget>(); // senderKey -> session
 
   function listTargets(): CdpTargetEntry[] {
     const out: CdpTargetEntry[] = [];
@@ -428,11 +443,10 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
               title: t.title || t.appName,
               url: t.url,
             })),
-          createPageSession: (targetId, send, onServerClose, o) => {
+          createPageSession: (targetId, send, onServerClose) => {
             const entry = listTargets().find((t) => t.targetId === targetId);
             if (!entry) return null;
-            if (o?.auto && pageHasClientSession(entry)) return null;
-            return createPageSession(entry, "browser", send, onServerClose);
+            return createPageSession(entry, send, onServerClose);
           },
         });
       });
@@ -460,19 +474,6 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     });
   });
 
-  function pageHasClientSession(entry: CdpTargetEntry): boolean {
-    for (const s of activeSessions) {
-      if (
-        s.kind !== "highlight" &&
-        s.source === entry.source &&
-        s.appId === entry.appId &&
-        s.pageId === entry.pageId
-      )
-        return true;
-    }
-    return false;
-  }
-
   /** A protocol error on one client (bad frame, oversized message, reset)
    *  must only drop that client. */
   function guardWs(ws: WSWebSocket) {
@@ -486,72 +487,26 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
 
   function createPageSession(
     entry: CdpTargetEntry,
-    kind: "page" | "browser",
     sendToTools: (text: string) => void,
     onServerClose: (reason: string, code: number) => void,
   ): PageSessionHandle {
-    // WIR allows one sender per page. A second attach used to silently
-    // steal the page and leave the first client hanging forever (R7);
-    // until we multiplex, the newest session wins and the older one is
-    // told why.
-    terminateSessions(
-      (s) => s.source === entry.source && s.appId === entry.appId && s.pageId === entry.pageId,
-      "replaced by a newer DevTools session",
-    );
-
-    const senderKey = crypto.randomUUID();
     // Virtual ws — CdpTarget only uses readyState + send().
     const fakeWs = {
       readyState: 1,
       send: (text: string) => sendToTools(text),
     } as unknown as WSWebSocket;
-    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, senderKey);
+    const channel = channelFor(entry);
+    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, channel.senderKey);
     installIOSFilters(cdp, filterOpts);
-    sessions.set(senderKey, cdp);
-
-    const debug = !!process.env.INSPECT_WEBKIT_DEBUG;
-    const unsub = subscribeSessionData(entry, senderKey, (text) => {
-      if (debug) console.error(`[cdp] target>> ${text.slice(0, 240)}`);
-      return cdp.onMessageFromTarget(text);
-    });
-
-    let closed = false;
-    const teardown = (reason: string) => {
-      if (closed) return false;
-      closed = true;
-      unsub();
-      activeSessions.delete(record);
-      cdp.close(reason);
+    const detach = channel.attach(cdp, (reason, code) => {
       try {
-        cdp.wi.forwardDidClose(cdp.appId, cdp.pageId, cdp.senderKey);
+        onServerClose(reason, code);
       } catch {}
-      sessions.delete(cdp.senderKey);
-      return true;
-    };
-    const record: ActiveSession = {
-      kind,
-      source: entry.source,
-      appId: entry.appId,
-      pageId: entry.pageId,
-      targetId: entry.targetId,
-      senderKey,
-      misses: 0,
-      firstMissAt: 0,
-      terminate(reason, code = CLOSE_INTERNAL) {
-        if (!teardown(reason)) return;
-        console.error(`# devtools session closed (${reason}): ${entry.targetId}`);
-        try {
-          onServerClose(reason, code);
-        } catch {}
-      },
-    };
-    activeSessions.add(record);
-
-    entry.source.wi.forwardSocketSetup(entry.appId, entry.pageId, senderKey);
+    });
     console.error(
-      `# devtools attached: ${entry.source.label} :: ${entry.appName} :: ${entry.title || entry.url}`,
+      `# devtools attached (${channel.clientCount} on page): ${entry.source.label} :: ${entry.appName} :: ${entry.title || entry.url}`,
     );
-
+    const debug = !!process.env.INSPECT_WEBKIT_DEBUG;
     return {
       onMessageFromTools(text: string) {
         if (debug) console.error(`[cdp] tools>>  ${text.slice(0, 300)}`);
@@ -560,111 +515,75 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
         );
       },
       close() {
-        teardown("DevTools client disconnected");
+        cdp.close("DevTools client disconnected");
+        detach();
       },
     };
   }
 
-  /** Route _rpc_applicationSentData: frames for one sender to `deliver`. */
-  function subscribeSessionData(
-    entry: CdpTargetEntry,
-    senderKey: string,
-    deliver: (text: string) => Promise<void>,
-  ): () => void {
-    return entry.source.wi.subscribe((m: WIMessage) => {
-      if (m.__selector !== "_rpc_applicationSentData:") return;
-      const arg = m.__argument as Record<string, any> | undefined;
-      if (!arg || typeof arg !== "object") return;
-      if (arg.WIRDestinationKey && arg.WIRDestinationKey !== senderKey) return;
-      if (arg.WIRApplicationIdentifierKey !== entry.appId) return;
-      if (
-        arg.WIRPageIdentifierKey !== undefined &&
-        Number(arg.WIRPageIdentifierKey) !== entry.pageId
-      )
-        return;
-      const data = arg.WIRMessageDataKey ?? arg.WIRSocketDataKey;
-      if (!data) return;
-      let text: string;
-      if (typeof data === "string") text = data;
-      else if (data instanceof Uint8Array) text = new TextDecoder().decode(data);
-      else return;
-      deliver(text).catch((e) =>
-        console.error(`# cdp: target message failed: ${(e as Error)?.message ?? e}`),
-      );
-    });
-  }
-
   // Hover-highlight sessions. Each target keeps its own short-lived CDP
-  // session so the host UI can flash an inspectable target the way Safari
-  // does when you hover an entry under Develop → device menu. We cache the
-  // session per target (DOM.getDocument is non-trivial), and idle-close it
-  // after 30s of no highlight activity.
+  // session (a client on the page's shared channel) so the host UI can
+  // flash an inspectable target the way Safari does when you hover an
+  // entry under Develop → device menu. The session is cached per target and
+  // idle-closed after a few seconds without highlight activity.
+  //
+  // It highlights by object id (Runtime.evaluate → DOM.highlightNode
+  // {objectId}) rather than DOM.getDocument + nodeId: WebKit's getDocument
+  // resets every DOM node id, which would break a DevTools Elements panel
+  // sharing the page.
   type HighlightSession = {
     cdp: CdpTarget;
     close: () => void;
-    rootNodeIdPromise: Promise<number>;
+    objectIdPromise: Promise<string>;
     idleTimer: ReturnType<typeof setTimeout> | null;
   };
   const highlightSessions = new Map<string, HighlightSession>();
   const HIGHLIGHT_IDLE_MS = 8_000;
+  const HIGHLIGHT_GROUP = "inspect-webkit-highlight";
 
   function getOrOpenHighlightSession(targetId: string): HighlightSession | null {
     const existing = highlightSessions.get(targetId);
     if (existing) return existing;
     const entry = listTargets().find((t) => t.targetId === targetId);
     if (!entry) return null;
-    // Never steal the page from a real DevTools session just to flash it.
-    if (pageHasClientSession(entry)) return null;
-    const senderKey = crypto.randomUUID();
+    const channel = channelFor(entry);
     const fakeWs = { readyState: 1, send: () => {} } as unknown as WSWebSocket;
-    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, senderKey);
-    installIOSFilters(cdp, filterOpts);
-    sessions.set(senderKey, cdp);
-    const unsub = subscribeSessionData(entry, senderKey, (text) => cdp.onMessageFromTarget(text));
-    entry.source.wi.forwardSocketSetup(entry.appId, entry.pageId, senderKey);
-    // DOM.getDocument can stall if Safari hasn't dispatched Target.targetCreated
-    // yet — wrap in 5s so callers don't hang. We close the session below in
-    // the .catch on the cached promise.
-    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-    const rootNodeIdPromise: Promise<number> = Promise.race([
-      cdp.callTarget("DOM.getDocument", { depth: 0 }).then((r: any) => r?.root?.nodeId as number),
-      new Promise<number>((_, reject) => {
-        timeoutTimer = setTimeout(() => reject(new Error("DOM.getDocument timeout")), 5_000);
-      }),
-    ]).finally(() => clearTimeout(timeoutTimer));
+    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, channel.senderKey);
     let closed = false;
     const session: HighlightSession = {
       cdp,
-      rootNodeIdPromise,
+      objectIdPromise: Promise.resolve(""),
       idleTimer: null,
       close() {
         if (closed) return;
         closed = true;
         if (session.idleTimer) clearTimeout(session.idleTimer);
-        unsub();
-        activeSessions.delete(record);
-        cdp.close("highlight session closed");
-        try {
-          cdp.wi.forwardDidClose(cdp.appId, cdp.pageId, cdp.senderKey);
-        } catch {}
-        sessions.delete(senderKey);
         if (highlightSessions.get(targetId) === session) highlightSessions.delete(targetId);
+        // Others may stay on the page: don't leave our remote objects behind.
+        if (channel.clientCount > 1) {
+          cdp.callTarget("Runtime.releaseObjectGroup", { objectGroup: HIGHLIGHT_GROUP }).catch(() => {});
+        }
+        cdp.close("highlight session closed");
+        detach();
       },
     };
-    const record: ActiveSession = {
-      kind: "highlight",
-      source: entry.source,
-      appId: entry.appId,
-      pageId: entry.pageId,
-      targetId,
-      senderKey,
-      misses: 0,
-      firstMissAt: 0,
-      terminate: () => session.close(),
-    };
-    activeSessions.add(record);
+    const detach = channel.attach(cdp, () => session.close());
+    // Evaluation can stall if Safari hasn't dispatched Target.targetCreated
+    // yet — the 5 s deadline keeps callers from hanging; the session is
+    // closed below in the .catch on the cached promise.
+    session.objectIdPromise = cdp
+      .callTarget(
+        "Runtime.evaluate",
+        { expression: "document.documentElement", objectGroup: HIGHLIGHT_GROUP },
+        5_000,
+      )
+      .then((r: any) => {
+        const id = r?.result?.objectId;
+        if (typeof id !== "string") throw new Error("no document element");
+        return id;
+      });
     highlightSessions.set(targetId, session);
-    rootNodeIdPromise.catch(() => session.close());
+    session.objectIdPromise.catch(() => session.close());
     return session;
   }
 
@@ -687,10 +606,9 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     bumpHighlightIdle(session);
     try {
       if (on) {
-        const nodeId = await session.rootNodeIdPromise;
-        if (!nodeId) return;
+        const objectId = await session.objectIdPromise;
         await session.cdp.callTarget("DOM.highlightNode", {
-          nodeId,
+          objectId,
           highlightConfig: {
             showInfo: false,
             contentColor: { r: 111, g: 168, b: 220, a: 0.55 },
@@ -721,7 +639,6 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     }
     const sess = createPageSession(
       entry,
-      "page",
       (text) => {
         if (ws.readyState === 1) ws.send(text);
       },

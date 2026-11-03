@@ -123,11 +123,31 @@ rejects WebSocket upgrades that carry an `Origin` other than
     the bridge's own ports.
   - `off` never re-fetches.
 
-Only one debugger can drive a WebKit page at a time. If a second DevTools
-client attaches to a page the bridge is already serving, the bridge closes the
-first client's WebSocket with code 1011 and the reason "replaced by a newer
-DevTools session". When the page, its app or the simulator/device goes away,
-the bridge also closes the WebSocket with 1011 and a reason, instead of
+Several clients can debug the same page at once — for example
+`chrome://inspect` DevTools and VS Code, a DevTools window reopened while
+the old one is still connected, or a Puppeteer script next to DevTools.
+WebKit itself allows one inspector connection per page, so the bridge
+holds that one connection and shares it:
+
+- every client gets its own replies (request ids are rewritten per client);
+- events go to every client that enabled their domain;
+- `X.enable` / `X.disable` are reference-counted. Only the first enable and
+  the last disable reach Safari. A client that enables a domain someone
+  else already enabled is sent the current execution contexts, parsed
+  scripts, pending pause and console messages first, like a fresh enable;
+- a client that disconnects releases what only it enabled and removes its
+  own breakpoints; the others keep working.
+
+Some WebKit state is per page, not per client, and is therefore shared:
+the pause state (any client can resume), pause-on-exceptions and other
+debugger settings (last writer wins), and DOM node ids. A `DOM.getDocument`
+from one client resets the node ids the other clients hold, so two clients
+both using an Elements panel on the same page will disturb each other.
+
+Before this release, a second client replaced the first, whose WebSocket
+was closed with 1011 "replaced by a newer DevTools session"; that no longer
+happens. When the page, its app or the simulator/device goes away, the
+bridge closes every client's WebSocket with 1011 and a reason, instead of
 leaving it hanging.
 
 #### Translation layer
