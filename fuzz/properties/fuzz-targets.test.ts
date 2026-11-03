@@ -5,7 +5,7 @@
 //   - random inputs: raw bytes, and mutations of the seeds.
 //
 // Bounded for CI. For long runs: FUZZ_RUNS=100000 bun test fuzz/properties
-// (see fuzz/README.md). Under Bun the WebSocket-accept paths of the server
+// (see fuzz/README.md); FUZZ_TARGET=a,b limits it to those targets. Under Bun the WebSocket-accept paths of the server
 // harnesses are skipped (Bun's `ws` shim needs a real socket); jazzer runs
 // them under Node.
 
@@ -35,6 +35,8 @@ const TARGETS: Array<[string, number]> = [
 
 afterAll(() => restoreConsole());
 
+const BYTES = fc.uint8Array({ maxLength: 4096, size: "large" });
+
 function files(dir: string): Uint8Array[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
@@ -59,7 +61,8 @@ function mutated(seeds: Uint8Array[]): fc.Arbitrary<Uint8Array> {
     });
 }
 
-for (const [target, ciRuns] of TARGETS) {
+const only = process.env.FUZZ_TARGET?.split(",");
+for (const [target, ciRuns] of TARGETS.filter(([t]) => !only || only.includes(t))) {
   const seeds = files(join(ROOT, "seeds", target));
   const regressions = files(join(ROOT, "regressions", target));
   const load = async () => ((await import(`../targets/${target}.ts`)) as { fuzz: (d: Uint8Array) => unknown }).fuzz;
@@ -72,7 +75,7 @@ for (const [target, ciRuns] of TARGETS) {
 
   test(`${target}: random and mutated inputs keep the invariants`, async () => {
     const fuzz = await load();
-    const arb = seeds.length ? fc.oneof(fc.uint8Array({ maxLength: 2048 }), mutated(seeds), mutated(seeds)) : fc.uint8Array({ maxLength: 2048 });
+    const arb = seeds.length ? fc.oneof(BYTES, mutated(seeds), mutated(seeds)) : BYTES;
     await fc.assert(
       fc.asyncProperty(arb, async (d) => {
         await fuzz(d);

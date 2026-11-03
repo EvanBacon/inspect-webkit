@@ -63,6 +63,9 @@ bun test fuzz/properties
 FUZZ_RUNS=100000 bun test fuzz/properties src/__tests__/plist-property.test.ts \
   src/cdp/__tests__/target-model.test.ts src/cdp/__tests__/page-channel-model.test.ts
 
+# One target only (e.g. to run several long runs in parallel)
+FUZZ_TARGET=cdp-tools FUZZ_RUNS=100000 bun test fuzz/properties
+
 # jazzer.js (Node >= 20)
 cd fuzz && npm install && cd ..   # @jazzer.js/core, kept out of the root package
 bun fuzz/scripts/build.ts                         # all targets → fuzz/dist/*.mjs
