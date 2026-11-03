@@ -9,6 +9,7 @@ import { installIOSFilters } from "../ios-protocol";
 function makeRig(opts: { filters?: boolean; targetBased?: boolean } = {}) {
   const toTools: any[] = [];
   const toTarget: any[] = [];
+  const outerIds = new Map<number, number>(); // inner id -> envelope id
   const ws = {
     readyState: 1,
     send(text: string) {
@@ -19,14 +20,17 @@ function makeRig(opts: { filters?: boolean; targetBased?: boolean } = {}) {
     forwardSocketData(_a: string, _p: number, _s: string, bytes: Uint8Array) {
       const outer = JSON.parse(new TextDecoder().decode(bytes));
       // Unwrap Target.sendMessageToTarget so tests see the inner command.
-      if (outer.method === "Target.sendMessageToTarget") toTarget.push(JSON.parse(outer.params.message));
-      else toTarget.push(outer);
+      if (outer.method === "Target.sendMessageToTarget") {
+        const inner = JSON.parse(outer.params.message);
+        outerIds.set(inner.id, outer.id);
+        toTarget.push(inner);
+      } else toTarget.push(outer);
     },
     forwardDidClose() {},
   };
   const t = new Target(ws as any, wi as any, "PID:1", 1, "sender");
   if (opts.filters !== false) installIOSFilters(t);
-  return { t, toTools, toTarget };
+  return { t, toTools, toTarget, outerIds };
 }
 
 async function targetBased(rig: ReturnType<typeof makeRig>) {
@@ -112,7 +116,7 @@ test("a throwing target-side filter passes the raw message through", async () =>
   await rig.t.onMessageFromTools(JSON.stringify({ id: 9, method: "Boom.go" }));
   // Outer Target.sendMessageToTarget ack first, then the inner reply
   // wrapped — Safari's usual order in target-based mode.
-  await rig.t.onMessageFromTarget(JSON.stringify({ id: 9, result: {} }));
+  await rig.t.onMessageFromTarget(JSON.stringify({ id: rig.outerIds.get(9), result: {} }));
   const inner = JSON.stringify({ id: 9, result: { ok: true } });
   await expect(
     rig.t.onMessageFromTarget(
