@@ -1,6 +1,8 @@
 import type { Target } from "../target";
 import { isPlainObject, swallowWith } from "../domain";
 
+let boxModelSeq = 0;
+
 export function installDomFilters(t: Target) {
   // Guards DOM.discardSearchResults against unknown ids (Safari errors loudly).
   const knownSearches = new Set<string>();
@@ -78,25 +80,27 @@ export function installDomFilters(t: Target) {
     if (nodeId !== undefined) {
       t.callTarget("DOM.highlightNode", { highlightConfig: BOX_HIGHLIGHT, nodeId }).catch(() => {});
     }
+    // One object group per call: concurrent calls must not release each
+    // other's handles.
+    const group = typeof p.objectId === "string" ? null : `inspect-webkit-boxmodel-${++boxModelSeq}`;
     try {
       const objectId: string =
-        typeof p.objectId === "string"
+        group === null
           ? p.objectId
-          : (await t.callTarget("DOM.resolveNode", { nodeId, objectGroup: "inspect-webkit-boxmodel" }))?.object?.objectId;
+          : (await t.callTarget("DOM.resolveNode", { nodeId, objectGroup: group }))?.object?.objectId;
       if (typeof objectId !== "string") throw new Error("could not resolve the node");
       const r = await t.callTarget("Runtime.callFunctionOn", {
         objectId,
         functionDeclaration: BOX_MODEL_FN,
         returnByValue: true,
       });
-      if (typeof p.objectId !== "string") {
-        t.callTarget("Runtime.releaseObjectGroup", { objectGroup: "inspect-webkit-boxmodel" }).catch(() => {});
-      }
       const model = r?.result?.value;
       if (r?.wasThrown || !isPlainObject(model)) throw new Error("Could not compute box model.");
       t.fireResultToTools(msg.id!, { model });
     } catch (e: any) {
       t.fireErrorToTools(msg.id!, { message: e?.message ?? String(e) });
+    } finally {
+      if (group !== null) t.callTarget("Runtime.releaseObjectGroup", { objectGroup: group }).catch(() => {});
     }
     return null;
   });
@@ -142,10 +146,17 @@ const BOX_HIGHLIGHT = {
   marginColor: { r: 246, g: 178, b: 107, a: 0.66 },
 };
 
-/** CDP BoxModel for `this` (an Element), quads in viewport CSS pixels. */
+/** CDP BoxModel for `this` (an Element or a Text node), quads in viewport
+ *  CSS pixels of the node's own frame. Throws, like Chrome, for nodes that
+ *  aren't rendered. */
 const BOX_MODEL_FN = `function () {
-  var r = this.getBoundingClientRect(), s = getComputedStyle(this);
-  function n(p) { return parseFloat(s[p]) || 0; }
+  var el = this.nodeType === 3 ? null : this;
+  var rects, r;
+  if (el) { rects = el.getClientRects(); r = el.getBoundingClientRect(); }
+  else { var range = document.createRange(); range.selectNodeContents(this); rects = range.getClientRects(); r = range.getBoundingClientRect(); }
+  if (!rects || rects.length === 0) throw new Error("Could not compute box model.");
+  var s = el ? getComputedStyle(el) : null;
+  function n(p) { return s ? parseFloat(s[p]) || 0 : 0; }
   function q(x, y, w, h) { return [x, y, x + w, y, x + w, y + h, x, y + h]; }
   var bl = n("borderLeftWidth"), bt = n("borderTopWidth"), br = n("borderRightWidth"), bb = n("borderBottomWidth");
   var pl = n("paddingLeft"), pt = n("paddingTop"), pr = n("paddingRight"), pb = n("paddingBottom");
@@ -155,7 +166,7 @@ const BOX_MODEL_FN = `function () {
     padding: q(r.left + bl, r.top + bt, r.width - bl - br, r.height - bt - bb),
     content: q(r.left + bl + pl, r.top + bt + pt, r.width - bl - br - pl - pr, r.height - bt - bb - pt - pb),
     margin: q(r.left - ml, r.top - mt, r.width + ml + mr, r.height + mt + mb),
-    width: r.width,
-    height: r.height
+    width: Math.round(r.width),
+    height: Math.round(r.height)
   };
 }`;

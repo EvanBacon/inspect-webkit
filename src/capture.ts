@@ -63,7 +63,7 @@ export function configureCapture(dir: string | null): void {
   capture.on = false;
   if (!dir) return;
   try {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
     fd = openSync(join(dir, `capture-${process.pid}-${Date.now()}.jsonl`), "a", 0o600);
     capture.on = true;
   } catch (e) {

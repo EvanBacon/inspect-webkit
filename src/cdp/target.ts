@@ -180,6 +180,12 @@ export class Target {
     this.link = link;
   }
 
+  /**
+   * Filters return the (possibly rewritten) message, or null to swallow it.
+   * A filter that swallows a request or reply and answers it itself must do
+   * so before its promise settles (fireResultToTools / fireErrorToTools):
+   * a reply swallowed with no answer is passed through untranslated.
+   */
   addMessageFilter(method: string, filter: Filter) {
     let list = this.filters.get(method);
     if (!list) this.filters.set(method, (list = []));

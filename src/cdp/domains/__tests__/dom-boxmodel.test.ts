@@ -111,3 +111,27 @@ test("getNodeForLocation only ever evaluates numeric coordinates", async () => {
   expect((await reply(r, 21)).result).toEqual({ nodeId: 0 });
   expect(r.toTarget.find((m) => m.method === "Runtime.evaluate").params.expression).toBe("document.elementFromPoint(3.5,4)");
 });
+
+// Review follow-ups: concurrent calls must not release each other's
+// handles, and a failed callFunctionOn must still release.
+test("concurrent getBoxModel calls use their own object groups, released even on failure", async () => {
+  let n = 0;
+  const r = rig((m) => {
+    if (m.method === "DOM.resolveNode") return { result: { object: { objectId: `o${++n}` } } };
+    if (m.method === "Runtime.callFunctionOn") {
+      return m.params.objectId === "o2" ? { error: { code: -32000, message: "boom" } } : { result: { result: { value: MODEL } } };
+    }
+    return { result: {} };
+  });
+  await Promise.all([
+    r.t.onMessageFromTools(JSON.stringify({ id: 30, method: "DOM.getBoxModel", params: { nodeId: 1 } })),
+    r.t.onMessageFromTools(JSON.stringify({ id: 31, method: "DOM.getBoxModel", params: { nodeId: 2 } })),
+  ]);
+  await reply(r, 30);
+  await reply(r, 31);
+  await Bun.sleep(5);
+  const groups = r.toTarget.filter((m) => m.method === "DOM.resolveNode").map((m) => m.params.objectGroup);
+  expect(new Set(groups).size).toBe(2);
+  const released = r.toTarget.filter((m) => m.method === "Runtime.releaseObjectGroup").map((m) => m.params.objectGroup);
+  expect(released.sort()).toEqual([...groups].sort());
+});

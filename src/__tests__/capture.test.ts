@@ -2,7 +2,7 @@
 // messages from real sessions, dumped as JSONL for building fuzz corpora.
 
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capture, configureCapture } from "../capture";
@@ -82,4 +82,10 @@ test("CDP messages on a page WebSocket are captured in both directions", async (
   expect(JSON.parse(cin.text)).toEqual({ id: 7, method: "Page.setAdBlockingEnabled", params: { enabled: true } });
   expect(cout).toBeDefined();
   expect(cin.s).toBe(cout.s);
+});
+
+test("a capture directory it creates is private to the user", () => {
+  const dir = join(tmp(), "new-sub");
+  configureCapture(dir);
+  expect(statSync(dir).mode & 0o777).toBe(0o700);
 });
