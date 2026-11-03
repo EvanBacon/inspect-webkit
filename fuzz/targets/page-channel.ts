@@ -216,6 +216,8 @@ function vocabOf(t: Target): Vocab {
   const keys = [...(t as unknown as { filters: Map<string, unknown> }).filters.keys()];
   const tools = keys.filter((k) => k.startsWith("tools::")).map((k) => k.slice(7));
   const target = keys.filter((k) => k.startsWith("target::") && k !== "target::error").map((k) => k.slice(8));
+  // Requests named after events too (a reply must survive their event filters).
+  tools.push(...target);
   for (const d of ["Runtime", "Debugger", "Network", "Console", "CSS", "DOM", "Page"]) tools.push(`${d}.enable`, `${d}.disable`);
   tools.push("Runtime.evaluate", "Debugger.setBreakpointByUrl", "Debugger.removeBreakpoint", "DOM.getDocument");
   target.push("Runtime.executionContextCreated", "Debugger.scriptParsed", "Debugger.paused", "Debugger.resumed", "Console.messageAdded");
