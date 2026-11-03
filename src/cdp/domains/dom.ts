@@ -1,5 +1,5 @@
 import type { Target } from "../target";
-import { swallowWith } from "../domain";
+import { isPlainObject, swallowWith } from "../domain";
 
 export function installDomFilters(t: Target) {
   // Guards DOM.discardSearchResults against unknown ids (Safari errors loudly).
@@ -11,7 +11,7 @@ export function installDomFilters(t: Target) {
   // CDP uses { mode: "searchForNode" | "none" }; WIR uses { enabled: bool }.
   t.addMessageFilter("tools::DOM.setInspectMode", (msg) => {
     msg.method = "DOM.setInspectModeEnabled";
-    if (msg.params) {
+    if (isPlainObject(msg.params)) {
       msg.params.enabled = msg.params.mode === "searchForNode";
       delete msg.params.mode;
       delete msg.params.highlightConfig;
@@ -28,7 +28,7 @@ export function installDomFilters(t: Target) {
   // Search ↔ Safari: rename only the case-sensitivity default. Safari
   // accepts the CDP shape verbatim otherwise.
   t.addMessageFilter("tools::DOM.performSearch", (msg) => {
-    if (msg.params)
+    if (isPlainObject(msg.params))
       msg.params = { query: msg.params.query, caseSensitive: !!msg.params.caseSensitive };
     return Promise.resolve(msg);
   });
@@ -45,7 +45,12 @@ export function installDomFilters(t: Target) {
 
   // Backend-id → frontend nodeId. WIR has the singular form only.
   t.addMessageFilter("tools::DOM.pushNodesByBackendIdsToFrontend", async (msg) => {
-    const ids: number[] = msg.params?.backendNodeIds ?? [];
+    const raw = isPlainObject(msg.params) ? msg.params.backendNodeIds : undefined;
+    if (raw !== undefined && !Array.isArray(raw)) {
+      t.fireErrorToTools(msg.id!, { code: -32602, message: "backendNodeIds: array expected" });
+      return null;
+    }
+    const ids: number[] = raw ?? [];
     const results = await Promise.all(
       ids.map((id) =>
         t
@@ -99,7 +104,7 @@ export function installDomFilters(t: Target) {
   // CDP DOM.resolveNode returns { object: RemoteObject }; WIR matches but
   // some Safari versions reject objectGroup=undefined. Drop it if absent.
   t.addMessageFilter("tools::DOM.resolveNode", (msg) => {
-    if (msg.params && msg.params.objectGroup === undefined) delete msg.params.objectGroup;
+    if (isPlainObject(msg.params) && msg.params.objectGroup === undefined) delete msg.params.objectGroup;
     return Promise.resolve(msg);
   });
 }

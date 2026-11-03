@@ -194,7 +194,7 @@ export function installCssFilters(t: Target) {
   // CSS.setStyleTexts — split CDP batch into per-edit CSS.setStyleText.
   t.addMessageFilter("tools::CSS.setStyleTexts", async (msg) => {
     const edits: Array<{ styleSheetId: string; range: Range; text: string }> =
-      msg.params?.edits ?? [];
+      Array.isArray(msg.params?.edits) ? msg.params.edits : [];
     const styles: any[] = [];
     for (const edit of edits) {
       try {

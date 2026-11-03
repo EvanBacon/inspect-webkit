@@ -1,5 +1,5 @@
 import type { Target } from "../target";
-import { type DomainCtx, swallowWith } from "../domain";
+import { type DomainCtx, isPlainObject, swallowWith } from "../domain";
 
 // Runtime domain translation. Most CDP Runtime methods map 1:1 onto WIR's
 // Runtime, so the bulk of work here is reshaping responses (evaluate-with-
@@ -36,7 +36,7 @@ export function installRuntimeFilters(t: Target, ctx: DomainCtx) {
   // or gesture-gated APIs (clipboard, fullscreen) failing in the REPL.
   t.addMessageFilter("tools::Runtime.evaluate", (msg) => {
     const p = msg.params;
-    if (!p) return Promise.resolve(msg);
+    if (!isPlainObject(p)) return Promise.resolve(msg);
     // Eager-eval: DevTools sends Runtime.evaluate with throwOnSideEffect
     // every keystroke to render the inline preview. V8 honors the flag and
     // refuses anything mutating; Safari's WIR has no equivalent and would
