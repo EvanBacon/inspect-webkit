@@ -5,6 +5,7 @@
 
 import { test, expect } from "bun:test";
 import { PageChannel, rewriteReplyId } from "../page-channel";
+import { installIOSFilters } from "../ios-protocol";
 import { makeClient, makeFakePage, tick } from "./helpers/fake-page";
 
 function rig() {
@@ -294,4 +295,54 @@ test("a client joining between a provisional commit and the old target's destroy
   const b = join("B");
   await tick();
   expect(b.t.debugState().active).toBe("page-2");
+});
+
+test("with the iOS filters installed, replayed inventory still reaches DevTools before the enable reply", async () => {
+  const { page, join, a } = await targetRig();
+  await a.send({ id: 1, method: "Runtime.enable" });
+  page.answerAll();
+  page.pushInner("page-1", { method: "Runtime.executionContextCreated", params: { context: { id: 3, name: "" } } });
+  await tick();
+  const b = join("B");
+  installIOSFilters(b.t);
+  await tick();
+  await b.send({ id: 1, method: "Runtime.enable" });
+  await tick(20);
+  const order = b.got.map((m) => m.method ?? `reply ${m.id}`);
+  expect(order.indexOf("Runtime.executionContextCreated")).toBeGreaterThanOrEqual(0);
+  expect(order.indexOf("Runtime.executionContextCreated")).toBeLessThan(order.indexOf("reply 1"));
+});
+
+test("Runtime.disable also drops the Console domain the bridge enabled for it; other clients keep console events", async () => {
+  const { page, join, a } = await targetRig();
+  installIOSFilters(a.t);
+  const b = join("B");
+  installIOSFilters(b.t);
+  await tick();
+  await a.send({ id: 1, method: "Runtime.enable" });
+  await b.send({ id: 1, method: "Runtime.enable" });
+  page.answerAll();
+  await tick();
+  await a.send({ id: 2, method: "Runtime.disable" });
+  page.answerAll();
+  await tick();
+  const msg = { method: "Console.messageAdded", params: { message: { source: "console-api", level: "log", text: "hi", type: "log", parameters: [] } } };
+  page.pushInner("page-1", msg);
+  await tick(20);
+  expect(a.events("Runtime.consoleAPICalled")).toEqual([]);
+  expect(b.events("Runtime.consoleAPICalled").length).toBe(1);
+  // B was the last one: its Runtime.disable takes Console down on the wire too.
+  await b.send({ id: 2, method: "Runtime.disable" });
+  await tick();
+  expect(page.innerRequests("Console.disable").length).toBe(1);
+});
+
+test("an explicit Log.enable keeps console events flowing after Runtime.disable", async () => {
+  const { page, a } = await targetRig();
+  installIOSFilters(a.t);
+  await a.send({ id: 1, method: "Log.enable" });
+  await a.send({ id: 2, method: "Runtime.enable" });
+  await a.send({ id: 3, method: "Runtime.disable" });
+  await tick();
+  expect(page.innerRequests("Console.disable")).toEqual([]);
 });

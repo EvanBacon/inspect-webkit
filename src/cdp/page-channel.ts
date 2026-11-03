@@ -331,11 +331,15 @@ export class PageChannel {
     const frames: Array<[string, boolean]> = events.map((raw) => [raw, inner]);
     if (outerId !== undefined) frames.push([JSON.stringify({ result: {}, id: outerId }), false]);
     if (typeof m.id === "number") frames.push([JSON.stringify({ result: {}, id: m.id }), inner]);
-    // Async, like a real reply: the client is still inside its send().
-    queueMicrotask(() => {
+    // Async, like a real reply: the client is still inside its send(). One
+    // at a time, so a slow event filter can't let the reply overtake.
+    queueMicrotask(async () => {
       for (const [raw, fromInner] of frames) {
         const msg = parseObject(raw);
-        if (msg && !client.gone) this.deliver(client, msg, raw, fromInner);
+        if (!msg || client.gone) continue;
+        await client.target.onParsedFromTarget(msg, raw, fromInner).catch((e) =>
+          console.error(`# cdp: target message failed: ${(e as Error)?.message ?? e}`),
+        );
       }
     });
   }
