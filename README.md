@@ -153,7 +153,9 @@ What works:
   CDP has no equivalent because Chrome treats it as on-by-default).
 - `Console` / `Log` — `console.log` surfaces as `Runtime.consoleAPICalled`
   (Safari's native channel); `Log.entryAdded` for browser-generated entries.
-- `Page` — `navigate`, `reload`, `getResourceTree`, navigation history shim,
+- `Page` — `navigate` (native, or a `location.href` shim on iOS 27 where
+  WebKit dropped it; always replies `{frameId, loaderId}`), `reload`,
+  `getResourceTree`, navigation history shim,
   cross-origin nav handling (`Target.didCommitProvisionalTarget`).
 - `DOM` — `getDocument`, `performSearch`, `pushNodesByBackendIdsToFrontend`,
   `getBoxModel`, `getNodeForLocation`, `resolveNode`.
