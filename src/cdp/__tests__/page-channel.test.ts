@@ -395,3 +395,20 @@ test("a first enable whose envelope fails is not counted either", async () => {
   await b.send({ id: 1, method: "Network.enable" });
   expect(page.innerRequests("Network.enable").length).toBe(2);
 });
+
+// Found by the wir-server fuzzer: a prototype-less dict as the page id made
+// Number() throw inside the channel's WIR subscriber.
+test("a malformed page id on applicationSentData is ignored, not thrown", async () => {
+  const { page, a } = await targetRig();
+  await a.send({ id: 1, method: "Runtime.evaluate", params: { expression: "1" } });
+  const [f] = page.innerRequests("Runtime.evaluate");
+  const wrapped = JSON.stringify({
+    method: "Target.dispatchMessageFromTarget",
+    params: { targetId: "page-1", message: JSON.stringify({ id: f!.inner.id, result: {} }) },
+  });
+  for (const pageId of [Object.create(null), [1], "1", 1n]) {
+    expect(() => page.push(null, { raw: wrapped, pageId })).not.toThrow();
+  }
+  await tick();
+  expect(a.replies(1)).toEqual([]);
+});

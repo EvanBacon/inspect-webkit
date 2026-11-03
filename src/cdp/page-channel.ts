@@ -394,7 +394,9 @@ export class PageChannel {
     if (!arg || typeof arg !== "object") return;
     if (arg.WIRDestinationKey && arg.WIRDestinationKey !== this.senderKey) return;
     if (arg.WIRApplicationIdentifierKey !== this.appId) return;
-    if (arg.WIRPageIdentifierKey !== undefined && Number(arg.WIRPageIdentifierKey) !== this.pageId) return;
+    // Daemon data: the page id must be the very number we set up (a decoded
+    // dict here would make Number() throw).
+    if (arg.WIRPageIdentifierKey !== undefined && arg.WIRPageIdentifierKey !== this.pageId) return;
     const data = arg.WIRMessageDataKey ?? arg.WIRSocketDataKey;
     let text: string;
     if (typeof data === "string") text = data;

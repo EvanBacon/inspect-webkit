@@ -49,14 +49,14 @@ export function makeFakePage(appId = "PID:1", pageId = 1) {
       return handlers.size;
     },
     /** Push a top-level CDP frame from Safari to the channel's sender. */
-    push(m: unknown, opts: { senderKey?: string; raw?: string } = {}) {
+    push(m: unknown, opts: { senderKey?: string; raw?: string; pageId?: unknown } = {}) {
       const text = opts.raw ?? JSON.stringify(m);
       for (const h of [...handlers]) {
         h({
           __selector: "_rpc_applicationSentData:",
           __argument: {
             WIRApplicationIdentifierKey: appId,
-            WIRPageIdentifierKey: pageId,
+            WIRPageIdentifierKey: "pageId" in opts ? opts.pageId : pageId,
             WIRDestinationKey: opts.senderKey ?? (senderKey || setups[setups.length - 1]),
             WIRMessageDataKey: new TextEncoder().encode(text),
           },
