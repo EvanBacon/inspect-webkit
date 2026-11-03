@@ -34,6 +34,7 @@ import { Target as CdpTarget } from "./target";
 import { installIOSFilters } from "./ios-protocol";
 import { PageChannel } from "./page-channel";
 import {
+  type CdpHttpServer,
   type CdpServerBaseOptions,
   WS_MAX_PAYLOAD,
   checkResponseBodyRefetch,
@@ -101,6 +102,10 @@ export type CdpServerOptions = CdpServerBaseOptions & {
   sourceManager?: SourceManager;
   /** @internal Test seam: override PAGE_GONE_GRACE_MS. */
   pageGoneGraceMs?: number;
+  /** @internal Fuzzing seam: don't bind any socket (drive it via onHttpServer). */
+  listen?: boolean;
+  /** @internal Fuzzing seam: receives the HTTP front door for in-process dispatch. */
+  onHttpServer?: (server: CdpHttpServer) => void;
 };
 
 export type CdpServer = {
@@ -692,14 +697,17 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     }
   }
 
-  try {
-    await httpServer.listen(host, port);
-  } catch (e) {
-    clearInterval(refreshTimer);
-    releaseSources();
-    throw e;
+  opts.onHttpServer?.(httpServer);
+  if (opts.listen !== false) {
+    try {
+      await httpServer.listen(host, port);
+    } catch (e) {
+      clearInterval(refreshTimer);
+      releaseSources();
+      throw e;
+    }
+    logCdpServerBanner({ brand: "safari", host, port: httpServer.addresses()[0]?.port ?? port });
   }
-  logCdpServerBanner({ brand: "safari", host, port: httpServer.addresses()[0]?.port ?? port });
 
   return {
     stop() {

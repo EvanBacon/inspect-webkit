@@ -260,6 +260,16 @@ export class CdpHttpServer {
     };
   }
 
+  /** @internal Serve one request in-process, as if it arrived on a socket (fuzzing). */
+  dispatch(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.requestListener(req, res);
+  }
+
+  /** @internal Handle one upgrade in-process, as if it arrived on a socket (fuzzing). */
+  dispatchUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+    this.handleUpgrade(req, socket, head);
+  }
+
   /** Register the WebSocket upgrade handler (called with a validated pathname). */
   onUpgrade(handler: UpgradeHandler): void {
     this.upgradeHandler = handler;
