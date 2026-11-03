@@ -92,8 +92,8 @@ async function run(data: Uint8Array): Promise<void> {
     if (channel.closed || clients.filter((c) => !c.gone).length >= MAX_CLIENTS) return;
     const got: string[] = [];
     const t = new Target({ readyState: 1, send: (s: string) => got.push(s) } as never, wi as never, "PID:1", 1, "unused");
-    t.callTimeoutMs = 300;
-    t.swapTimeoutMs = 20;
+    t.callTimeoutMs = 100;
+    t.swapTimeoutMs = 5;
     t.workerGraceMs = 5;
     installIOSFilters(t, { network: { responseBodyRefetch: "off" } });
     vocab ??= vocabOf(t);

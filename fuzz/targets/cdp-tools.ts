@@ -55,8 +55,8 @@ async function run(data: Uint8Array): Promise<void> {
     subscribe: () => () => {},
   };
   const t = new Target(ws as never, wi as never, "PID:1", 1, "sender");
-  t.callTimeoutMs = 300;
-  t.swapTimeoutMs = 20;
+  t.callTimeoutMs = 100;
+  t.swapTimeoutMs = 5;
   t.workerGraceMs = 5;
   const refetchLog: RefetchLog = [];
   const dnsBytes = new Bytes(data.subarray(1, 64));
