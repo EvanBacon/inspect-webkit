@@ -132,7 +132,7 @@ test("browser-scope events carry the browser sessionId once allocated", () => {
   // Spontaneous targetCreated also carries it.
   const created = ws.byMethod("Target.targetCreated");
   expect(created.length).toBe(1);
-  expect(created[0].sessionId).toBe(browserSid);
+  expect(created[0]!.sessionId).toBe(browserSid);
 });
 
 test("setAutoAttach attaches existing pages and emits attachedToTarget", () => {
@@ -172,12 +172,12 @@ test("flatten-mode page command routes to the correct session and reply gets the
   });
 
   // Page session received the command without sessionId.
-  expect(pages[0].inbox.length).toBe(1);
-  const inner = JSON.parse(pages[0].inbox[0]);
+  expect(pages[0]!.inbox.length).toBe(1);
+  const inner = JSON.parse(pages[0]!.inbox[0]!);
   expect(inner).toEqual({ id: 99, method: "Runtime.evaluate", params: { expression: "1+2" } });
 
   // Page session response gets sessionId injected on the way out.
-  pages[0].send(JSON.stringify({ id: 99, result: { value: 3 } }));
+  pages[0]!.send(JSON.stringify({ id: 99, result: { value: 3 } }));
   const reply = ws.sent.find((f) => f.id === 99 && f.sessionId === pageSid);
   expect(reply).toBeTruthy();
   expect(reply!.result).toEqual({ value: 3 });
@@ -197,7 +197,7 @@ test("legacy Target.sendMessageToTarget forwards the inner payload", () => {
   });
 
   expect(ws.byId(2)!.result).toEqual({});
-  expect(pages[0].inbox).toEqual([inner]);
+  expect(pages[0]!.inbox).toEqual([inner]);
 });
 
 test("Target.detachFromTarget closes the page session and emits detachedFromTarget", () => {
@@ -209,10 +209,10 @@ test("Target.detachFromTarget closes the page session and emits detachedFromTarg
   ws.feed({ id: 2, method: "Target.detachFromTarget", params: { sessionId: pageSid } });
 
   expect(ws.byId(2)!.result).toEqual({});
-  expect(pages[0].closed).toBe(true);
+  expect(pages[0]!.closed).toBe(true);
   const det = ws.byMethod("Target.detachedFromTarget");
   expect(det.length).toBe(1);
-  expect(det[0].params).toEqual({ sessionId: pageSid, targetId: PAGE_A.targetId });
+  expect(det[0]!.params).toEqual({ sessionId: pageSid, targetId: PAGE_A.targetId });
 });
 
 test("attachToTarget on unknown target id returns -32000", () => {

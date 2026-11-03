@@ -59,8 +59,8 @@ test("Runtime.evaluate with throwOnSideEffect:true is short-circuited at the bri
 
   // Must reply synchronously with a side-effect EvalError, in CDP shape.
   expect(replies).toHaveLength(1);
-  expect(replies[0].id).toBe(7);
-  const r = replies[0].result;
+  expect(replies[0]!.id).toBe(7);
+  const r = replies[0]!.result;
   expect(r.exceptionDetails).toBeDefined();
   expect(r.exceptionDetails.text).toMatch(/side-effect/);
   expect(r.result.subtype).toBe("error");
