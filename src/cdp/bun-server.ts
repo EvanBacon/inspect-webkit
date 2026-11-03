@@ -8,12 +8,15 @@ import { WebSocketServer, type WebSocket as WSWebSocket } from "ws";
 import { Target as CdpTarget } from "./target";
 import { installIOSFilters } from "./ios-protocol";
 import { BunInspectorClient } from "../bun/source";
+import type { AddressInfo } from "node:net";
 import {
   type CdpServerBaseOptions,
+  WS_MAX_PAYLOAD,
   buildJsonTarget,
   createCdpHttpServer,
-  listen,
   logCdpServerBanner,
+  rejectUpgrade,
+  safeDecode,
 } from "./http";
 
 export type BunUpstream = {
@@ -30,6 +33,8 @@ export type BunCdpServerOptions = CdpServerBaseOptions & {
 export type BunCdpServer = {
   stop(): void;
   getTargets(): BunUpstream[];
+  /** Addresses the HTTP/WS server is listening on. */
+  addresses(): AddressInfo[];
 };
 
 export async function startBunCdpServer(opts: BunCdpServerOptions): Promise<BunCdpServer> {
@@ -56,27 +61,37 @@ export async function startBunCdpServer(opts: BunCdpServerOptions): Promise<BunC
           type: "node",
         }),
       ),
-  });
+  }, { host, allowOrigins: opts.allowOrigins });
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
+  wss.on("error", (e) => console.error(`# ws server error: ${(e as Error)?.message ?? e}`));
 
-  httpServer.on("upgrade", (req, socket, head) => {
-    const url = new URL(req.url ?? "/", "http://placeholder");
-    if (!url.pathname.startsWith("/devtools/page/")) {
-      socket.destroy();
+  httpServer.onUpgrade((req, socket, head, pathname) => {
+    if (!pathname.startsWith("/devtools/page/")) {
+      rejectUpgrade(socket, 404, "not found");
       return;
     }
-    const id = decodeURIComponent(url.pathname.slice("/devtools/page/".length));
+    const id = safeDecode(pathname.slice("/devtools/page/".length));
+    if (id == null) {
+      rejectUpgrade(socket, 400, "bad request: invalid percent-encoding");
+      return;
+    }
     const upstream = upstreams.find((u) => u.url === id);
     if (!upstream) {
-      socket.destroy();
+      rejectUpgrade(socket, 404, "unknown target");
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on("error", (e) => {
+        console.error(`# ws error: ${(e as Error)?.message ?? e}`);
+        try {
+          ws.terminate();
+        } catch {}
+      });
       attachWs(ws, upstream).catch((e) => {
         console.error(`# bun attach failed: ${(e as Error).message}`);
         try {
-          ws.close(1011, (e as Error).message);
+          ws.close(1011, Buffer.from(String((e as Error)?.message ?? e)).subarray(0, 120).toString());
         } catch {}
       });
     });
@@ -85,7 +100,13 @@ export async function startBunCdpServer(opts: BunCdpServerOptions): Promise<BunC
   async function attachWs(ws: WSWebSocket, upstream: BunUpstream) {
     const debug = !!process.env.INSPECT_WEBKIT_DEBUG;
     const bun = new BunInspectorClient(upstream.url);
+    let clientGone = false;
+    ws.on("close", () => {
+      clientGone = true;
+      bun.close();
+    });
     await bun.ready();
+    if (clientGone) return;
 
     // appId/pageId/senderKey are inert on Bun — Target threads them back into
     // BunInspectorClient.forwardSocketData, which ignores them.
@@ -95,33 +116,55 @@ export async function startBunCdpServer(opts: BunCdpServerOptions): Promise<BunC
 
     const unsub = bun.onFrame((text) => {
       if (debug) console.error(`[bun] target>> ${text.slice(0, 240)}`);
-      cdp.onMessageFromTarget(text);
+      cdp.onMessageFromTarget(text).catch((e) =>
+        console.error(`# cdp: target message failed: ${(e as Error)?.message ?? e}`),
+      );
+    });
+    bun.onClose(() => {
+      cdp.close("upstream Bun inspector closed");
+      try {
+        ws.close(1011, "upstream Bun inspector closed");
+      } catch {}
     });
 
     ws.on("message", (raw, isBinary) => {
-      const text = isBinary ? new TextDecoder().decode(raw as Buffer) : raw.toString();
-      if (debug) console.error(`[bun] tools>>  ${text.slice(0, 300)}`);
-      cdp.onMessageFromTools(text);
+      try {
+        const text = isBinary ? new TextDecoder().decode(raw as Buffer) : raw.toString();
+        if (debug) console.error(`[bun] tools>>  ${text.slice(0, 300)}`);
+        cdp.onMessageFromTools(text).catch((e) =>
+          console.error(`# cdp: tools message failed: ${(e as Error)?.message ?? e}`),
+        );
+      } catch (e) {
+        console.error(`# ws message error: ${(e as Error)?.message ?? e}`);
+      }
     });
 
     ws.on("close", () => {
       unsub();
-      bun.close();
+      cdp.close("DevTools client disconnected");
     });
 
     console.error(`# devtools attached: ${upstream.label ?? upstream.url}`);
   }
 
-  await listen(httpServer, host, port);
-  logCdpServerBanner({ brand: "bun", host, port });
+  await httpServer.listen(host, port);
+  logCdpServerBanner({ brand: "bun", host, port: httpServer.addresses()[0]?.port ?? port });
 
   return {
     stop() {
+      for (const c of wss.clients) {
+        try {
+          c.terminate();
+        } catch {}
+      }
       wss.close();
       httpServer.close();
     },
     getTargets() {
       return upstreams.slice();
+    },
+    addresses() {
+      return httpServer.addresses();
     },
   };
 }

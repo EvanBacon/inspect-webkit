@@ -12,20 +12,45 @@ export type BunFrameHandler = (text: string) => void;
 export class BunInspectorClient {
   private ws: WebSocket;
   private handlers = new Set<BunFrameHandler>();
+  private closeHandlers = new Set<() => void>();
   private openPromise: Promise<void>;
+  private opened = false;
 
   constructor(public readonly url: string) {
     this.ws = new WebSocket(url);
     this.ws.binaryType = "nodebuffer";
     this.openPromise = new Promise((resolve, reject) => {
-      this.ws.once("open", () => resolve());
-      this.ws.once("error", (e) => reject(e));
+      this.ws.once("open", () => {
+        this.opened = true;
+        resolve();
+      });
+      // Persistent listener: a second 'error' must not be unhandled.
+      this.ws.on("error", (e) => {
+        if (!this.opened) reject(e);
+        else console.error(`# bun upstream error: ${(e as Error)?.message ?? e}`);
+      });
+      this.ws.on("close", () => {
+        if (!this.opened) reject(new Error(`upstream ${url} closed before open`));
+        const hs = [...this.closeHandlers];
+        this.closeHandlers.clear();
+        for (const h of hs) {
+          try {
+            h();
+          } catch {}
+        }
+      });
     });
+    // ready() may never be awaited if the client leaves first.
+    this.openPromise.catch(() => {});
     this.ws.on("message", (data, isBinary) => {
       const text = isBinary
         ? new TextDecoder().decode(data as Buffer)
         : data.toString();
-      for (const h of this.handlers) h(text);
+      for (const h of this.handlers) {
+        try {
+          h(text);
+        } catch {}
+      }
     });
   }
 
@@ -37,6 +62,12 @@ export class BunInspectorClient {
   onFrame(h: BunFrameHandler): () => void {
     this.handlers.add(h);
     return () => this.handlers.delete(h);
+  }
+
+  /** Called once when the upstream inspector socket closes. */
+  onClose(h: () => void): () => void {
+    this.closeHandlers.add(h);
+    return () => this.closeHandlers.delete(h);
   }
 
   // --- WebInspectorClient surface used by Target -------------------------
