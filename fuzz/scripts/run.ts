@@ -42,6 +42,7 @@ const SETTINGS: Record<string, { sync?: boolean; maxLen: number; dict?: string }
   "front-door": { maxLen: 4096, dict: "http.dict" },
   "page-channel": { maxLen: 16384, dict: "cdp.dict" },
   "browser-endpoint": { maxLen: 8192, dict: "cdp.dict" },
+  refetch: { maxLen: 256 },
 };
 const s = SETTINGS[target];
 if (!s) throw new Error(`no settings for ${target}`);

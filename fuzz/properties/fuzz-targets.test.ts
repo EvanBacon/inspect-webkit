@@ -31,6 +31,7 @@ const TARGETS: Array<[string, number]> = [
   ["wir-server", 100],
   ["front-door", 150],
   ["browser-endpoint", 300],
+  ["refetch", 2000],
 ];
 
 afterAll(() => restoreConsole());
