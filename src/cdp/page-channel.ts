@@ -38,8 +38,9 @@ import type { WebInspectorClient, WIMessage } from "../webinspector";
 import type { CdpMessage, Target, TargetLink } from "./target";
 
 const CLOSE_INTERNAL = 1011;
-/** Cap on remembered inventory events per (target, domain). */
+/** Caps on remembered inventory events per (target, domain). */
 const MAX_INVENTORY = 10_000;
+const MAX_INVENTORY_BYTES = 16 * 1024 * 1024;
 
 const debug = (...args: unknown[]) => {
   if (process.env.INSPECT_WEBKIT_DEBUG) console.error("[channel]", ...args);
@@ -77,7 +78,37 @@ type InventorySpec = {
   add: Record<string, (p: any) => unknown>;
   remove?: Record<string, (p: any) => unknown>;
   clear?: string[];
+  /** Item cap (default MAX_INVENTORY). */
+  max?: number;
 };
+
+/** One (target, domain)'s remembered events in arrival order, bounded by
+ *  count and bytes; the oldest go first, the newest always stays. */
+class Inventory {
+  private items = new Map<string, string>();
+  private bytes = 0;
+  constructor(private readonly maxItems: number) {}
+  values(): IterableIterator<string> {
+    return this.items.values();
+  }
+  entries(): IterableIterator<[string, string]> {
+    return this.items.entries();
+  }
+  delete(k: string): void {
+    const raw = this.items.get(k);
+    if (raw === undefined) return;
+    this.items.delete(k);
+    this.bytes -= raw.length;
+  }
+  add(k: string, raw: string): void {
+    this.delete(k); // re-insert at the end: replay in arrival order
+    this.items.set(k, raw);
+    this.bytes += raw.length;
+    while (this.items.size > 1 && (this.items.size > this.maxItems || this.bytes > MAX_INVENTORY_BYTES)) {
+      this.delete(this.items.keys().next().value!);
+    }
+  }
+}
 const PAUSED = "\0paused";
 const INVENTORY: Record<string, InventorySpec> = {
   Runtime: {
@@ -99,6 +130,8 @@ const INVENTORY: Record<string, InventorySpec> = {
   Console: {
     add: { "Console.messageAdded": () => undefined },
     clear: ["Console.messagesCleared"],
+    // WebKit's console agent keeps the latest 100 for its own replay.
+    max: 100,
   },
 };
 
@@ -147,7 +180,7 @@ export class PageChannel {
   /** (target, domain) → number of clients holding it enabled. */
   private holders = new Map<string, number>();
   /** (target, domain) → item key → raw event, in arrival order. */
-  private inventory = new Map<string, Map<string, string>>();
+  private inventory = new Map<string, Inventory>();
   private inventorySeq = 0;
   /** Live inner targets (WebKit announces them once, at socket setup). */
   private targets = new Map<string, Record<string, unknown>>();
@@ -494,19 +527,16 @@ export class PageChannel {
     const addKey = spec.add[method];
     if (!addKey) return;
     let items = this.inventory.get(key);
-    if (!items) this.inventory.set(key, (items = new Map()));
+    if (!items) this.inventory.set(key, (items = new Inventory(spec.max ?? MAX_INVENTORY)));
     const ctx = method === "Runtime.executionContextCreated" ? params?.context : undefined;
     if (ctx?.type === "normal" && typeof ctx.frameId === "string") {
       // A frame's new main world: its previous contexts (all worlds) are dead.
-      for (const [k, r] of [...items]) {
+      for (const [k, r] of [...items.entries()]) {
         if (parseObject(r)?.params?.context?.frameId === ctx.frameId) items.delete(k);
       }
     }
     const k = addKey(params);
-    const itemKey = k === undefined || k === null ? `\0seq${++this.inventorySeq}` : String(k);
-    items.delete(itemKey); // re-insert at the end: replay in arrival order
-    items.set(itemKey, raw);
-    if (items.size > MAX_INVENTORY) items.delete(items.keys().next().value!);
+    items.add(k === undefined || k === null ? `\0seq${++this.inventorySeq}` : String(k), raw);
   }
 
   private forgetTarget(targetId: string): void {

@@ -412,3 +412,38 @@ test("a malformed page id on applicationSentData is ignored, not thrown", async 
   await tick();
   expect(a.replies(1)).toEqual([]);
 });
+
+// The inventory kept up to 10 000 raw events of any size per (target,
+// domain), replayed one by one to every joining client. A page logging large
+// strings in a loop held ~1 GB per page. Console keeps the latest 100 like
+// WebKit's own console agent, and every domain has a byte budget.
+async function consoleJoiner(count: number, text: (i: number) => string) {
+  const { page, join, a } = await targetRig();
+  await a.send({ id: 1, method: "Console.enable" });
+  page.answerAll();
+  await tick();
+  for (let i = 0; i < count; i++) {
+    page.pushInner("page-1", { method: "Console.messageAdded", params: { message: { source: "console-api", level: "log", text: text(i), type: "log" } } });
+  }
+  await tick(20);
+  const b = join("B");
+  await tick();
+  await b.send({ id: 1, method: "Console.enable" });
+  await tick(50);
+  return b.events("Console.messageAdded").map((e: any) => e.params.message.text as string);
+}
+
+test("a joining client gets the latest 100 console messages, not 10 000", async () => {
+  const texts = await consoleJoiner(150, (i) => String(i));
+  expect(texts.length).toBe(100);
+  expect(texts[0]).toBe("50");
+  expect(texts.at(-1)).toBe("149");
+});
+
+test("the inventory has a byte budget: huge messages are dropped oldest first", async () => {
+  const big = "x".repeat(6 * 1024 * 1024);
+  const texts = await consoleJoiner(6, (i) => `${i}${big}`);
+  expect(texts.length).toBeLessThanOrEqual(3);
+  expect(texts.length).toBeGreaterThanOrEqual(1);
+  expect(texts.at(-1)!.startsWith("5")).toBe(true);
+});
