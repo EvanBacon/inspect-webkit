@@ -286,7 +286,8 @@ async function runScenario(actions: Action[]) {
         break;
       }
       case "commit": {
-        const prov = [...alive].filter(([, v]) => v.provisional).map(([k]) => k);
+        // WebKit only commits provisional pages (a navigation), never workers.
+        const prov = [...alive].filter(([, v]) => v.provisional && v.type === "page").map(([k]) => k);
         if (!prov.length) break;
         const next = prov[a.pick % prov.length]!;
         alive.get(next)!.provisional = false;
