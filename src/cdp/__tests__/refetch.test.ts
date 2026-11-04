@@ -32,7 +32,7 @@ function fakeDeps(
         body: new TextEncoder().encode(r.body ?? ""),
       };
     },
-    localAddresses: () => ["127.0.0.1", "::1", "192.168.1.20"],
+    localAddresses: () => ["127.0.0.1", "::1", "192.168.1.20", "2600:1700:abcd::42", "17.253.144.10"],
   };
   return { deps, calls, lookups };
 }
@@ -143,6 +143,22 @@ describe("refetch policy", () => {
       await expect(refetch(u, any, deps)).rejects.toThrow(/bridge/);
     }
     expect(calls).toHaveLength(0);
+  });
+
+  test('"public" refuses this machine\'s own public addresses (global IPv6, public IPv4)', async () => {
+    // A Mac with a global IPv6 address: dev servers bound to :: answer on it,
+    // so a page could read local-only services through the re-fetch.
+    const { deps, calls } = fakeDeps({ "me.test": ["2600:1700:abcd::42"], "me4.test": ["17.253.144.10"], "far.test": ["93.184.216.34"] });
+    for (const u of ["http://[2600:1700:abcd::42]:5173/", "http://me.test:3000/", "http://[::ffff:17.253.144.10]:8080/", "http://me4.test/"]) {
+      await expect(refetch(u, base(), deps)).rejects.toThrow(/this machine/);
+    }
+    await expect(refetch("http://far.test/x", base(), deps)).resolves.toBeDefined();
+    expect(calls.map((c) => c.url)).toEqual(["http://far.test/x"]);
+  });
+
+  test('"any" still allows this machine\'s public addresses on other ports', async () => {
+    const { deps } = fakeDeps({ "me.test": ["2600:1700:abcd::42"] });
+    await expect(refetch("http://me.test:5173/", base({ policy: "any" }), deps)).resolves.toBeDefined();
   });
 
   test('"off" never fetches', async () => {

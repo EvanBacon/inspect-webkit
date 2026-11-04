@@ -252,6 +252,11 @@ async function resolveChecked(url: URL, o: RefetchOptions, deps: RefetchDeps, si
     if (o.policy !== "any" && kind !== "public") {
       throw new RefetchError(`refused: ${host} resolves to a ${kind} address (${address})`);
     }
+    // A public address of this Mac (global IPv6, public IPv4) still reaches
+    // services bound to :: / 0.0.0.0 here: local-only for "public".
+    if (o.policy !== "any" && onThisMachine) {
+      throw new RefetchError(`refused: ${host} is an address of this machine (${address})`);
+    }
   }
   return addrs;
 }
