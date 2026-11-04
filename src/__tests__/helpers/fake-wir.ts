@@ -99,7 +99,7 @@ export function seedApp(
 export function sendListing(
   rig: ReturnType<typeof makeFakeWir>,
   appId: string,
-  pages: Array<{ id: number; url?: string; title?: string }>,
+  pages: Array<{ id: number; url?: string; title?: string; connectionId?: string }>,
 ) {
   const listing: Record<string, PlistValue> = {};
   for (const p of pages) {
@@ -108,6 +108,7 @@ export function sendListing(
       WIRTitleKey: p.title ?? `page ${p.id}`,
       WIRURLKey: p.url ?? `https://example.com/${p.id}`,
       WIRTypeKey: "WIRTypeWebPage",
+      ...(p.connectionId ? { WIRConnectionIdentifierKey: p.connectionId } : {}),
     };
   }
   rig.push("_rpc_applicationSentListing:", {

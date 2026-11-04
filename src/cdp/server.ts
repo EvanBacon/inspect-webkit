@@ -88,6 +88,8 @@ type PageRecord = {
   targetId: string;
   misses: number;
   firstMissAt: number;
+  /** Warned that another inspector holds this page (reset once it's free). */
+  warnedForeignHolder: boolean;
 };
 
 export type CdpServerOptions = CdpServerBaseOptions & {
@@ -192,6 +194,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       targetId: entry.targetId,
       misses: 0,
       firstMissAt: 0,
+      warnedForeignHolder: false,
     });
     return channel;
   }
@@ -316,15 +319,39 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     });
   }
 
+  function heldByOther(src: Source, page: WIListedPage): boolean {
+    return !!page.connectionId && page.connectionId !== src.wi.connection;
+  }
+
+  /**
+   * WebKit keeps the first inspector on a page and silently ignores later
+   * ones, so while Safari's Web Inspector (or another bridge) holds a page our
+   * clients get no replies at all. Say so, once per takeover.
+   */
+  function noteHolder(p: PageRecord, foreign: boolean): void {
+    if (!foreign) {
+      p.warnedForeignHolder = false;
+      return;
+    }
+    if (p.warnedForeignHolder || p.channel.clientCount === 0) return;
+    p.warnedForeignHolder = true;
+    console.error(
+      `warn: ${p.targetId} is held by another inspector (Safari's Web Inspector, or another ` +
+        "inspect-webkit / CDP bridge). WebKit won't answer clients here until it detaches.",
+    );
+  }
+
   /** Close sessions whose page has dropped out of its app's listing. */
   function notePageListing(src: Source, appId: string, listing: Map<string, WIListedPage>) {
-    const present = new Set<number>();
-    for (const p of listing.values()) present.add(p.pageId);
+    const listed = new Map<number, WIListedPage>();
+    for (const p of listing.values()) listed.set(p.pageId, p);
     const now = Date.now();
     for (const p of [...pages.values()]) {
       if (p.source !== src || p.appId !== appId) continue;
-      if (present.has(p.pageId)) {
+      const page = listed.get(p.pageId);
+      if (page) {
         p.misses = 0;
+        noteHolder(p, heldByOther(src, page));
         continue;
       }
       if (p.misses++ === 0) p.firstMissAt = now;
@@ -360,8 +387,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
           // own connection id. A match means it's our own attachment (the
           // iframe inspector or a hover-highlight session); anything else is
           // a foreign debugger (Safari Develop menu, chrome://inspect, …).
-          const otherInspector =
-            !!p.connectionId && p.connectionId !== src.wi.connection;
+          const otherInspector = heldByOther(src, p);
           out.push({
             targetId: `${src.id}:${a.appId}:${p.pageId}`,
             source: src,
@@ -492,6 +518,8 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     console.error(
       `# devtools attached (${channel.clientCount} on page): ${entry.source.label} :: ${entry.appName} :: ${entry.title || entry.url}`,
     );
+    const record = pages.get(entry.targetId);
+    if (record) noteHolder(record, entry.inUseByOtherInspector);
     const debug = !!process.env.INSPECT_WEBKIT_DEBUG;
     return {
       onMessageFromTools(text: string) {
