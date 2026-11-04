@@ -253,8 +253,8 @@ export class CdpHttpServer {
       } catch (e) {
         console.error(`# http handler error: ${(e as Error)?.message ?? e}`);
         try {
-          if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain" });
-          res.end("internal error");
+          if (!res.headersSent) send(res, 500, "text/plain", "internal error");
+          else res.end();
         } catch {}
       }
     };
@@ -278,15 +278,11 @@ export class CdpHttpServer {
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
     const reqHost = req.headers.host ?? "";
     if (!this.guard.hostAllowed(req.headers.host)) {
-      res.writeHead(403, { "content-type": "text/plain" });
-      res.end("forbidden: Host header not allowed\n");
-      return;
+      return send(res, 403, "text/plain", "forbidden: Host header not allowed\n");
     }
     const pathname = safePathname(req.url);
     if (pathname == null) {
-      res.writeHead(400, { "content-type": "text/plain" });
-      res.end("bad request\n");
-      return;
+      return send(res, 400, "text/plain", "bad request\n");
     }
     const routes = this.routes;
     if (pathname === "/json/version") {
@@ -299,8 +295,7 @@ export class CdpHttpServer {
     if (pathname === "/json/protocol") return sendJson(res, {});
     if (pathname === "/") return sendIndexHtml(res, routes, reqHost);
 
-    res.writeHead(404, { "content-type": "text/plain" });
-    res.end("not found");
+    send(res, 404, "text/plain", "not found");
   }
 
   private handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -424,11 +419,22 @@ export function createCdpHttpServer(
   return new CdpHttpServer(routes, guardOpts);
 }
 
+/**
+ * Every answer carries an explicit Content-Length. Chrome's chrome://inspect
+ * poller frames bodies by Content-Length only and reads a chunked answer
+ * (what Bun's node:http sends without one) as empty: no targets (issue #1).
+ */
+function send(res: http.ServerResponse, status: number, type: string, body: string): void {
+  res.writeHead(status, {
+    "Content-Type": type,
+    "Content-Length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
 function sendJson(res: http.ServerResponse, body: unknown, status = 200): void {
   // Serialize first: a failure must still be able to answer 500.
-  const text = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  res.end(text);
+  send(res, status, "application/json; charset=utf-8", JSON.stringify(body));
 }
 
 function sendIndexHtml(
@@ -460,8 +466,7 @@ function sendIndexHtml(
     note +
     `<ul>${list}</ul>` +
     `<hr><p>JSON: <a href="/json/list">/json/list</a> · <a href="/json/version">/json/version</a></p>`;
-  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(body);
+  send(res, 200, "text/html; charset=utf-8", body);
 }
 
 export function logCdpServerBanner(opts: { brand: string; host: string; port: number }): void {
