@@ -291,6 +291,10 @@ export class SimulatorDiscovery implements SourceDiscovery {
   }
 
   private async find(authoritative: boolean): Promise<Found[]> {
+    // A booted simulator always has a webinspectord_sim socket. With none on
+    // disk, skip xcrun: it wakes CoreSimulatorService, and without the
+    // developer tools /usr/bin/xcrun is a stub that offers to install them.
+    if (this.safeScan().length === 0) return [];
     let booted: BootedSimulator[];
     try {
       booted = await this.deps.listBooted(authoritative);

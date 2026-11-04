@@ -248,3 +248,39 @@ test("refresh() (a source dropped) asks simctl authoritatively", async () => {
   expect(await waitUntil(() => seen.length === 2, 1000)).toBe(true);
   expect(seen).toEqual([false, true]);
 });
+
+// A booted simulator always has a live webinspectord_sim socket. With no
+// socket files at all, nothing can be booted, so don't spawn `xcrun simctl`
+// every 30 s: on a Mac without the developer tools /usr/bin/xcrun is a stub
+// that offers to install them, and simctl wakes CoreSimulatorService.
+test("no socket files: never asks simctl or lsof, even on the safety rescan", async () => {
+  const state = { listBooted: 0, socketFor: 0, lsof: 0 };
+  const d = new SimulatorDiscovery({
+    deps: {
+      scanSockets: () => [],
+      listBooted: async () => (state.listBooted++, []),
+      socketFor: async () => (state.socketFor++, null),
+      lsof: async () => (state.lsof++, []),
+      connect: async () => {
+        throw new Error("not used");
+      },
+    },
+    pollMs: 10,
+    fullRescanMs: 30,
+  });
+  let descs: SourceDescriptor[] | null = null;
+  d.start((x) => (descs = x));
+  stops.push(() => d.stop());
+  await d.ready;
+  await Bun.sleep(150);
+  expect(state).toEqual({ listBooted: 0, socketFor: 0, lsof: 0 });
+  expect(descs ?? []).toEqual([]);
+});
+
+test("simctl is asked again once a socket file appears", async () => {
+  const r = rig({ sockets: [], booted: [{ udid: "U-1", name: "iPhone" }], env: { "U-1": SOCK("a") } });
+  await r.d.ready;
+  expect(r.descs).toEqual([]);
+  r.state.sockets.push(SOCK("a"));
+  expect(await waitUntil(() => r.descs.length === 1)).toBe(true);
+});
