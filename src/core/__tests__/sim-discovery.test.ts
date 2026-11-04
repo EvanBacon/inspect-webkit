@@ -27,6 +27,8 @@ function rig(init: {
   lsof?: Array<{ socketPath: string; pid: number }>;
   lsofFails?: boolean;
   getenvFails?: boolean;
+  /** scanSockets throws (the socket directory can't be read, e.g. EMFILE). */
+  scanFails?: boolean;
   /** What the cheap device.plist path reports (default: same as `booted`). */
   fastBooted?: Array<{ udid: string; name: string }>;
 }) {
@@ -34,6 +36,7 @@ function rig(init: {
   const deps: SimDiscoveryDeps = {
     scanSockets: () => {
       state.calls.scan++;
+      if (state.scanFails) throw Object.assign(new Error("EMFILE: too many open files"), { code: "EMFILE" });
       return [...state.sockets];
     },
     listBooted: async (authoritative) => {
@@ -342,6 +345,14 @@ describe("transient lookup failures keep known simulators", () => {
     r.state.fastBooted = []; // device.plist unreadable mid-write
     r.state.sockets.push(SOCK("b")); // any socket change triggers a cheap resolve
     await Bun.sleep(120);
+    expect(r.changes).toBe(before);
+    expect(r.descs.map((d) => d.id)).toEqual(["sim:U-1"]);
+  });
+
+  test("the socket directory can't be read (EMFILE)", async () => {
+    const r = known();
+    const before = await settle(r, () => (r.state.scanFails = true));
+    expect(r.state.calls.scan).toBeGreaterThan(2); // polls kept running
     expect(r.changes).toBe(before);
     expect(r.descs.map((d) => d.id)).toEqual(["sim:U-1"]);
   });

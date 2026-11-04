@@ -37,7 +37,8 @@ const SOCKET_NAME = "com.apple.webinspectord_sim.socket";
 export type BootedSimulator = { udid: string; name: string };
 
 export type SimDiscoveryDeps = {
-  /** Candidate socket paths (live and stale). Must be cheap. */
+  /** Candidate socket paths (live and stale). Must be cheap. Throws when
+   *  it can't tell (the directory exists but can't be read). */
   scanSockets(): string[];
   /** Booted simulators. `authoritative` asks simctl rather than a cheaper
    *  source that might be stale. */
@@ -146,8 +147,11 @@ export const defaultSimDeps: SimDiscoveryDeps = {
     let names: string[];
     try {
       names = readdirSync(LAUNCHD_TMP);
-    } catch {
-      return [];
+    } catch (e) {
+      // No directory: no simulators. Anything else (EMFILE, EACCES) means
+      // we can't tell, which must not read as "every simulator shut down".
+      if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+      throw e;
     }
     const out: string[] = [];
     for (const n of names) {
@@ -210,7 +214,7 @@ export class SimulatorDiscovery implements SourceDiscovery {
 
   start(onChange: (d: SourceDescriptor[]) => void): void {
     this.onChange = onChange;
-    this.lastScan = new Set(this.safeScan());
+    this.lastScan = new Set(this.safeScan() ?? []);
     void this.resolve();
     this.timer = setInterval(() => this.tick(), this.pollMs);
     (this.timer as { unref?: () => void }).unref?.();
@@ -230,18 +234,22 @@ export class SimulatorDiscovery implements SourceDiscovery {
     this.resolveReady();
   }
 
-  private safeScan(): string[] {
+  /** The socket scan, or null when it failed (unknown, not empty). */
+  private safeScan(): string[] | null {
     try {
       return this.deps.scanSockets();
-    } catch {
-      return [];
+    } catch (e) {
+      debug(`socket scan failed (${(e as Error)?.message ?? e}); keeping what we know`);
+      return null;
     }
   }
 
   private tick(): void {
     if (this.stopped) return;
     const now = Date.now();
-    const scan = new Set(this.safeScan());
+    const scanned = this.safeScan();
+    if (!scanned) return; // try again next poll; nothing changes meanwhile
+    const scan = new Set(scanned);
     let changed = false;
     for (const p of scan) {
       if (this.lastScan.has(p)) continue;
@@ -304,9 +312,10 @@ export class SimulatorDiscovery implements SourceDiscovery {
     // A booted simulator always has a webinspectord_sim socket. With none on
     // disk, skip xcrun: it wakes CoreSimulatorService, and without the
     // developer tools /usr/bin/xcrun is a stub that offers to install them.
-    const scan = new Set(this.safeScan());
-    if (scan.size === 0) return [];
-    const known = this.found.filter((f) => scan.has(f.socketPath));
+    const scanned = this.safeScan();
+    if (scanned?.length === 0) return [];
+    const scan = scanned ? new Set(scanned) : null;
+    const known = scan ? this.found.filter((f) => scan.has(f.socketPath)) : this.found;
     let booted: BootedSimulator[];
     try {
       booted = await this.deps.listBooted(authoritative);
