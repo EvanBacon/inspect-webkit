@@ -66,15 +66,32 @@ inspect-webkit                # serves http://localhost:9222
 This stands up a Chrome DevTools Protocol endpoint backed by Safari's Web
 Inspector. Each iOS page (device or simulator) shows up as a CDP target.
 
-**Chrome DevTools.** Open `chrome://inspect/#devices`, click *Configure…*,
-add `localhost:9222`, click *Done*. Wait a couple seconds — your iOS target
-appears under "Remote Target". Click *inspect* to open DevTools attached.
+**Chrome DevTools.**
 
-> Modern Chrome (≥ v147) silently rejects `devtools://` URLs from argv,
-> address-bar paste, and link clicks — `chrome://inspect` is the only
-> reliable attach path. If you see "Inspect with Chrome Developer Tools"
-> open as a regular tab instead of a DevTools window, you've hit that
-> block; go through `chrome://inspect` instead.
+1. Open `chrome://inspect/#devices`.
+2. Next to *Discover network targets* (leave it checked), click *Configure…*,
+   add `localhost:9222`, and click *Done*.
+3. Within a couple of seconds your iOS pages appear under *Remote Target*
+   (`localhost:9222 (inspect-webkit)`). Click *inspect*.
+
+The bridge prints these steps, with its real port, when it starts.
+
+Alternatively, open `http://localhost:9222/`. It lists a
+`devtools://devtools/bundled/inspector.html?ws=…` URL for each page; paste one
+into Chrome's address bar. `js_app.html` and `devtools_app.html` work in place
+of `inspector.html` too. Chrome only opens `devtools://` URLs that you type or
+paste: it refuses them as links ("Not allowed to load local resource") and
+ignores them on the command line.
+
+> Tested with Chrome 156 on macOS. Versions up to 0.0.5 answered HTTP with
+> chunked bodies, which chrome://inspect's discovery client can't read, so
+> it showed the configured host with no pages under it (issue #1).
+
+**DevTools opens but stays empty?** WebKit gives a page to one inspector at a
+time and keeps the first. While Safari's Web Inspector (*Develop* menu) or
+another bridge is attached to the page, this bridge's clients get no replies.
+The bridge logs `warn: … is held by another inspector`. Close the other
+inspector, then reopen DevTools.
 
 **VS Code.** Add a launch configuration:
 

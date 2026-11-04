@@ -448,15 +448,16 @@ function sendIndexHtml(
       (t) =>
         `<li><strong>${escapeHtml(t.title || t.url || t.id)}</strong><br>` +
         `<small>${escapeHtml(t.url)}</small><br>` +
-        `<small>copy &amp; paste into Chrome's address bar:</small><br>` +
+        `<small>copy &amp; paste into Chrome's address bar (Chrome won't open devtools:// from a link):</small><br>` +
         `<code style="user-select:all">${escapeHtml(t.devtoolsFrontendUrl)}</code></li>`,
     )
     .join("");
   const heading = `inspect-webkit${routes.brand ? ` (${routes.brand})` : ""}`;
   const note =
     routes.indexNote ??
-    `<p>Open <code style="display:inline;padding:1px 4px">chrome://inspect</code> → <em>Configure…</em> → add ` +
-      `<code style="display:inline;padding:1px 4px">${escapeHtml(reqHost)}</code>.</p>`;
+    `<p>Open <code style="display:inline;padding:1px 4px">chrome://inspect/#devices</code> → ` +
+      `<em>Discover network targets: Configure…</em> → add ` +
+      `<code style="display:inline;padding:1px 4px">${escapeHtml(reqHost)}</code> → <em>Done</em>, then click <em>inspect</em>.</p>`;
   const body =
     `<!doctype html><meta charset=utf-8><title>${escapeHtml(heading)}</title>` +
     `<style>body{font:14px -apple-system,sans-serif;max-width:760px;margin:2em auto;padding:0 1em}` +
@@ -478,8 +479,17 @@ export function logCdpServerBanner(opts: { brand: string; host: string; port: nu
   const cyan = (s: string) => c("36", s);
   const green = (s: string) => c("32", s);
 
-  const url = `http://${opts.host}:${opts.port}`;
-  console.error(`${green("●")} ${bold(`${opts.brand} CDP`)} ${cyan(url)}`);
-  console.error(`  ${dim("chrome")}  chrome://inspect → ${opts.host}:${opts.port}`);
-  console.error(`  ${dim("vscode")}  "type": "chrome", "port": ${opts.port}`);
+  // What a client on this machine should dial: a wildcard bind is reachable
+  // as localhost; IPv6 literals need brackets.
+  const bare = opts.host.replace(/^\[|\]$/g, "");
+  const dial = isWildcardHost(bare) ? "localhost" : bare.includes(":") ? `[${bare}]` : bare;
+  const hostPort = `${dial}:${opts.port}`;
+  console.error(`${green("●")} ${bold(`${opts.brand} CDP`)} ${cyan(`http://${hostPort}`)}`);
+  console.error(
+    `  ${dim("chrome")}  open chrome://inspect/#devices → Discover network targets: Configure… → add ${hostPort} → Done, then click "inspect"`,
+  );
+  console.error(
+    `          or paste a page's devtools:// URL from ${cyan(`http://${hostPort}/`)} into the address bar (links and command-line URLs are blocked)`,
+  );
+  console.error(`  ${dim("vscode")}  "type": "chrome", "request": "attach", "port": ${opts.port}`);
 }
