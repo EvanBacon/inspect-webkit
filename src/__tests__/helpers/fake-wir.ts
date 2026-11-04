@@ -215,6 +215,9 @@ export function makeFakeDaemon(
     dropAfterMs?: number;
     pages?: Array<{ id: number; url?: string; title?: string }>;
     appId?: string;
+    /** Answer from unref'd timers, like a real daemon over an unref'd socket:
+     *  a pending reply doesn't keep the process alive. */
+    unrefReplies?: boolean;
   } = {},
 ) {
   const rig = makeFakeWir();
@@ -255,7 +258,8 @@ export function makeFakeDaemon(
       };
       // The daemon only starts answering once the throttle has elapsed.
       const wait = Math.max(0, startedAt + (opts.replyDelayMs ?? 0) - Date.now());
-      setTimeout(reply, wait);
+      const t = setTimeout(reply, wait);
+      if (opts.unrefReplies) t.unref();
     }
     return ok;
   };

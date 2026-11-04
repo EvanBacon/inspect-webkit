@@ -55,6 +55,10 @@ const LIST_TARGETS_LINGER_MS = 30_000;
  */
 export async function listTargets(): Promise<Target[]> {
   const lease = acquireSharedSourceManager();
+  // The manager's sockets and timers are unref'd so they never keep a host
+  // process alive. That also means nothing else keeps the event loop running
+  // while this call waits: hold it explicitly until we've answered.
+  const keepAlive = setInterval(() => {}, 1 << 30);
   try {
     await lease.manager.settled(LIST_TARGETS_SETTLE_MS);
     const perSource = await Promise.all(
@@ -71,6 +75,7 @@ export async function listTargets(): Promise<Target[]> {
     );
     return perSource.flat();
   } finally {
+    clearInterval(keepAlive);
     lease.release(LIST_TARGETS_LINGER_MS);
   }
 }

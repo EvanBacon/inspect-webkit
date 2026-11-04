@@ -100,3 +100,37 @@ test("a manager left connecting at release() does not keep the host process aliv
   expect(code).toBe(0);
   expect(Date.now() - t0).toBeLessThan(5000);
 }, 15_000);
+
+// The real daemon sockets and every SourceManager timer are unref'd, so
+// nothing kept the event loop alive while listTargets() waited: under Node
+// (the published dist/index.js) `await listTargets()` exited the process
+// with code 13 ("unsettled top-level await") instead of resolving.
+test("await listTargets() keeps the process alive until it resolves (Node)", async () => {
+  if (!Bun.which("node")) return;
+  const dir = `${import.meta.dir}/.tmp-list-targets-node`;
+  const entry = `${dir}/entry.ts`;
+  await Bun.write(
+    entry,
+    `
+    import { listTargets } from ${JSON.stringify(`${import.meta.dir}/../index`)};
+    import { SourceManager, setSharedSourceManagerFactory } from ${JSON.stringify(`${import.meta.dir}/../core/source-manager`)};
+    import { makeFakeDaemon } from ${JSON.stringify(`${import.meta.dir}/helpers/fake-wir`)};
+    const desc = { id: "sim:X", kind: "simulator", udid: "X", label: "X", endpoint: "/x",
+      async open() { return { wi: makeFakeDaemon({ replyDelayMs: 300, unrefReplies: true, pages: [{ id: 7 }] }).wi }; } };
+    setSharedSourceManagerFactory(() => new SourceManager({ discoveries: [{ ready: Promise.resolve(), start: (cb) => cb([desc]), refresh() {}, stop() {} }] }));
+    const targets = await listTargets();
+    console.log("pages=" + targets.map((t) => t.pageId).join(","));
+    `,
+  );
+  try {
+    const built = await Bun.build({ entrypoints: [entry], target: "node", outdir: dir, format: "esm" });
+    expect(built.success).toBe(true);
+    const p = Bun.spawn(["node", `${dir}/entry.js`], { stdout: "pipe", stderr: "pipe" });
+    const code = await Promise.race([p.exited, new Promise((r) => setTimeout(() => r("timeout"), 15000))]);
+    if (code === "timeout") p.kill();
+    const out = await new Response(p.stdout).text();
+    expect({ code, out: out.trim() }).toEqual({ code: 0, out: "pages=7" });
+  } finally {
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  }
+}, 30000);
