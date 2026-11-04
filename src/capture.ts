@@ -12,7 +12,7 @@
 // (`capture.on`), and nothing here allocates. Captures contain page
 // contents and anything typed into DevTools: treat them as sensitive.
 
-import { mkdirSync, openSync, writeSync, closeSync } from "node:fs";
+import { closeSync, constants as fsConstants, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 type CdpDir = "cdp-in" | "cdp-out";
@@ -64,7 +64,11 @@ export function configureCapture(dir: string | null): void {
   if (!dir) return;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fd = openSync(join(dir, `capture-${process.pid}-${Date.now()}.jsonl`), "a", 0o600);
+    // A fresh private file: never follow or append to one planted in a
+    // shared directory by another user.
+    const { O_WRONLY, O_APPEND, O_CREAT, O_EXCL, O_NOFOLLOW } = fsConstants;
+    const flags = O_WRONLY | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW;
+    fd = openSync(join(dir, `capture-${process.pid}-${Date.now()}.jsonl`), flags, 0o600);
     capture.on = true;
   } catch (e) {
     console.error(`warn: INSPECT_WEBKIT_CAPTURE: ${(e as Error)?.message ?? e}`);

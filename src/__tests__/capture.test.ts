@@ -1,8 +1,8 @@
 // INSPECT_WEBKIT_CAPTURE=<dir>: raw WIR frames (both directions) and CDP
 // messages from real sessions, dumped as JSONL for building fuzz corpora.
 
-import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { test, expect, afterEach, spyOn } from "bun:test";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capture, configureCapture } from "../capture";
@@ -88,4 +88,32 @@ test("a capture directory it creates is private to the user", () => {
   const dir = join(tmp(), "new-sub");
   configureCapture(dir);
   expect(statSync(dir).mode & 0o777).toBe(0o700);
+});
+
+// In a shared directory (e.g. /tmp) another local user could pre-create the
+// capture file world-readable, or plant a symlink so the capture (cookies,
+// page contents, everything typed into DevTools) lands in a file of theirs.
+// The file must be created fresh: never followed, never appended to.
+test("a planted capture file or symlink is refused, not written through", () => {
+  const dir = tmp();
+  const now = spyOn(Date, "now").mockReturnValue(1234);
+  const err = spyOn(console, "error").mockImplementation(() => {});
+  cleanups.push(() => (now.mockRestore(), err.mockRestore()));
+  const name = join(dir, `capture-${process.pid}-1234.jsonl`);
+
+  const victim = join(dir, "victim.txt");
+  writeFileSync(victim, "keep\n");
+  symlinkSync(victim, name);
+  configureCapture(dir);
+  capture.cdp("in", "page#1", "secret");
+  expect(capture.on).toBe(false);
+  expect(readFileSync(victim, "utf8")).toBe("keep\n");
+
+  rmSync(name);
+  writeFileSync(name, "", { mode: 0o666 });
+  configureCapture(dir);
+  capture.cdp("in", "page#1", "secret");
+  expect(capture.on).toBe(false);
+  expect(readFileSync(name, "utf8")).toBe("");
+  expect(err.mock.calls.length).toBeGreaterThanOrEqual(2);
 });
