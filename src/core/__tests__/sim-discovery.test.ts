@@ -2,7 +2,7 @@
 // socket dirs as the change trigger, `simctl` to map socket → UDID (stable
 // ids), lsof only as a fallback.
 
-import { test, expect, afterEach } from "bun:test";
+import { test, expect, afterEach, describe } from "bun:test";
 import {
   SimulatorDiscovery,
   parseBootedDevices,
@@ -25,6 +25,10 @@ function rig(init: {
   env: Record<string, string>;
   simctlFails?: boolean;
   lsof?: Array<{ socketPath: string; pid: number }>;
+  lsofFails?: boolean;
+  getenvFails?: boolean;
+  /** What the cheap device.plist path reports (default: same as `booted`). */
+  fastBooted?: Array<{ udid: string; name: string }>;
 }) {
   const state = { ...init, calls: { listBooted: 0, socketFor: 0, lsof: 0, scan: 0 } };
   const deps: SimDiscoveryDeps = {
@@ -32,17 +36,19 @@ function rig(init: {
       state.calls.scan++;
       return [...state.sockets];
     },
-    listBooted: async () => {
+    listBooted: async (authoritative) => {
       state.calls.listBooted++;
       if (state.simctlFails) throw new Error("xcrun: error: unable to find utility simctl");
-      return [...state.booted];
+      return [...(!authoritative && state.fastBooted ? state.fastBooted : state.booted)];
     },
     socketFor: async (udid) => {
       state.calls.socketFor++;
+      if (state.getenvFails) throw new Error("simctl getenv timed out");
       return state.env[udid] ?? null;
     },
     lsof: async () => {
       state.calls.lsof++;
+      if (state.lsofFails) throw new Error("lsof failed");
       return state.lsof ?? [];
     },
     connect: async () => {
@@ -283,4 +289,75 @@ test("simctl is asked again once a socket file appears", async () => {
   expect(r.descs).toEqual([]);
   r.state.sockets.push(SOCK("a"));
   expect(await waitUntil(() => r.descs.length === 1)).toBe(true);
+});
+
+// A lookup that *fails* is not a shutdown. Before, any hiccup (simctl getenv
+// timing out while Xcode builds, CoreSimulatorService restarting, a
+// device.plist caught mid-write) dropped the simulator from the reported set,
+// and the SourceManager closed every DevTools session on it.
+describe("transient lookup failures keep known simulators", () => {
+  const known = () =>
+    rig({ sockets: [SOCK("a")], booted: [{ udid: "U-1", name: "iPhone" }], env: { "U-1": SOCK("a") }, lsof: [{ socketPath: SOCK("a"), pid: 42 }] });
+
+  async function settle(r: ReturnType<typeof rig>, mutate: () => void) {
+    await r.d.ready;
+    expect(r.descs.map((d) => d.id)).toEqual(["sim:U-1"]);
+    const before = r.changes;
+    mutate();
+    r.d.refresh(); // authoritative rescan, as after a dropped connection
+    await Bun.sleep(80);
+    return before;
+  }
+
+  test("simctl getenv fails", async () => {
+    const r = known();
+    const before = await settle(r, () => (r.state.getenvFails = true));
+    expect(r.state.calls.socketFor).toBeGreaterThan(1);
+    expect(r.changes).toBe(before);
+    expect(r.descs.map((d) => d.id)).toEqual(["sim:U-1"]);
+  });
+
+  test("simctl list fails: lsof sees the same socket, the UDID id is kept", async () => {
+    const r = known();
+    const before = await settle(r, () => (r.state.simctlFails = true));
+    expect(r.state.calls.lsof).toBeGreaterThan(0);
+    expect(r.changes).toBe(before);
+    expect(r.descs.map((d) => d.id)).toEqual(["sim:U-1"]);
+  });
+
+  test("simctl and lsof both fail", async () => {
+    const r = known();
+    const before = await settle(r, () => {
+      r.state.simctlFails = true;
+      r.state.lsofFails = true;
+    });
+    expect(r.changes).toBe(before);
+    expect(r.descs.map((d) => d.id)).toEqual(["sim:U-1"]);
+  });
+
+  test("the cheap path missing a known simulator is confirmed by simctl first", async () => {
+    const r = known();
+    await r.d.ready;
+    const before = r.changes;
+    r.state.fastBooted = []; // device.plist unreadable mid-write
+    r.state.sockets.push(SOCK("b")); // any socket change triggers a cheap resolve
+    await Bun.sleep(120);
+    expect(r.changes).toBe(before);
+    expect(r.descs.map((d) => d.id)).toEqual(["sim:U-1"]);
+  });
+
+  test("a real shutdown is still reported", async () => {
+    const r = known();
+    await settle(r, () => (r.state.booted = []));
+    expect(r.descs).toEqual([]);
+  });
+
+  test("a vanished socket file is still reported", async () => {
+    const r = known();
+    await settle(r, () => {
+      r.state.sockets = [];
+      r.state.getenvFails = true;
+    });
+    expect(r.descs).toEqual([]);
+  });
 });

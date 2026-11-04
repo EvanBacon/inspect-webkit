@@ -192,6 +192,8 @@ export class SimulatorDiscovery implements SourceDiscovery {
   /** Sockets that appeared after start and aren't mapped yet → first seen. */
   private unmapped = new Map<string, number>();
   private mapped = new Set<string>();
+  /** What the last resolve reported, so a failed lookup can't drop it. */
+  private found: Found[] = [];
   private resolving = false;
   private again: "no" | "yes" | "authoritative" = "no";
   private lastAuthoritativeAt = 0;
@@ -268,6 +270,7 @@ export class SimulatorDiscovery implements SourceDiscovery {
     try {
       const found = await this.find(authoritative);
       if (this.stopped) return;
+      this.found = found;
       this.mapped = new Set(found.map((f) => f.socketPath));
       for (const f of found) this.unmapped.delete(f.socketPath);
       const descs = found.map((f) => this.descriptor(f));
@@ -290,24 +293,53 @@ export class SimulatorDiscovery implements SourceDiscovery {
     }
   }
 
+  /**
+   * The simulators that should exist now. A lookup that fails is not a
+   * shutdown: a simulator we already know stays until its socket file is gone
+   * or a successful `simctl list` no longer reports it booted. Otherwise a
+   * simctl hiccup (Xcode building, CoreSimulatorService restarting) or a
+   * device.plist caught mid-write would close every session on it.
+   */
   private async find(authoritative: boolean): Promise<Found[]> {
     // A booted simulator always has a webinspectord_sim socket. With none on
     // disk, skip xcrun: it wakes CoreSimulatorService, and without the
     // developer tools /usr/bin/xcrun is a stub that offers to install them.
-    if (this.safeScan().length === 0) return [];
+    const scan = new Set(this.safeScan());
+    if (scan.size === 0) return [];
+    const known = this.found.filter((f) => scan.has(f.socketPath));
     let booted: BootedSimulator[];
     try {
       booted = await this.deps.listBooted(authoritative);
+      // Only simctl may remove a known simulator: the cheap path skips
+      // device.plist files it can't read.
+      if (!authoritative && known.some((f) => !booted.some((b) => b.udid === f.udid))) {
+        booted = await this.deps.listBooted(true);
+      }
     } catch (e) {
       debug(`simctl unavailable (${(e as Error)?.message ?? e}); falling back to lsof`);
-      const rows = await this.deps.lsof().catch(() => []);
+      let rows: Array<{ socketPath: string; pid: number }>;
+      try {
+        rows = await this.deps.lsof();
+      } catch {
+        return known;
+      }
       return rows.map((r) => {
+        const prev = known.find((f) => f.socketPath === r.socketPath);
+        if (prev) return prev; // keep the UDID-based id
         const token = /com\.apple\.launchd\.([^/]+)\//.exec(r.socketPath)?.[1] ?? String(r.pid);
         return { id: `sim:${token}`, udid: token, socketPath: r.socketPath };
       });
     }
     const rows = await Promise.all(
-      booted.map(async (b) => ({ ...b, socketPath: await this.deps.socketFor(b.udid).catch(() => null) })),
+      booted.map(async (b) => {
+        let socketPath: string | null;
+        try {
+          socketPath = await this.deps.socketFor(b.udid);
+        } catch {
+          socketPath = known.find((f) => f.udid === b.udid)?.socketPath ?? null;
+        }
+        return { ...b, socketPath };
+      }),
     );
     const out: Found[] = [];
     for (const r of rows) {
