@@ -425,6 +425,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       listTargets().map((t) =>
         buildJsonTarget({
           reqHost,
+          listening: httpServer.addresses(),
           id: t.targetId,
           description: `${t.source.label}${t.bundleId ? ` (${t.bundleId})` : ""}`,
           title: t.title || t.appName,

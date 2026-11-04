@@ -150,3 +150,19 @@ test("server: the index page shows the 127.0.0.1 frontend URL", async () => {
   expect(html).toContain(`?ws=127.0.0.1:${port}/devtools/page/`);
   expect(html).not.toContain(`?ws=localhost:`);
 });
+
+test("server: with --host ::1 (no 127.0.0.1 listener) localhost isn't rewritten", async () => {
+  const port = await freePort();
+  const rig = makeFakeWir();
+  const server = await startCdpServer({
+    port,
+    host: "::1",
+    openSources: async () => [{ kind: "simulator", id: "sim:fake", label: "sim:fake", wi: rig.wi }],
+  });
+  cleanups.push(() => server.stop());
+  seedApp(rig, [{ id: 1 }]);
+  await waitUntil(() => server.getTargets().length === 1);
+  const res = await fetch(`http://[::1]:${port}/json/list`, { headers: { Host: `localhost:${port}` } });
+  const [t] = (await res.json()) as any[];
+  expect(t.devtoolsFrontendUrl).toContain(`?ws=localhost:${port}/devtools/page/`);
+});

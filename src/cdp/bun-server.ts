@@ -61,6 +61,7 @@ export async function startBunCdpServer(opts: BunCdpServerOptions): Promise<BunC
       upstreams.map((u) =>
         buildJsonTarget({
           reqHost,
+          listening: httpServer.addresses(),
           id: encodeURIComponent(u.url),
           description: u.label ?? "bun",
           title: u.label ?? u.url,

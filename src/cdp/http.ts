@@ -77,9 +77,11 @@ export function buildJsonTarget(args: {
   title: string;
   url: string;
   type: string;
+  /** The addresses the server listens on (for the frontend URL's host). */
+  listening: AddressInfo[];
 }): CdpJsonTarget {
   const path = `/devtools/page/${args.id}`;
-  const frontendUrl = `devtools://devtools/bundled/inspector.html?ws=${frontendWsHost(args.reqHost)}${path}`;
+  const frontendUrl = `devtools://devtools/bundled/inspector.html?ws=${frontendWsHost(args.reqHost, args.listening)}${path}`;
   return {
     description: args.description,
     devtoolsFrontendUrl: frontendUrl,
@@ -96,11 +98,12 @@ export function buildJsonTarget(args: {
 /**
  * The bundled DevTools frontend's CSP only lets it dial `ws://127.0.0.1:*`,
  * so a `?ws=localhost:…` frontend URL opens a DevTools that never connects.
- * localhost is served on 127.0.0.1 too (the default bind), so point there.
+ * Point at 127.0.0.1 instead when we listen there (the default bind does).
  */
-function frontendWsHost(reqHost: string): string {
+function frontendWsHost(reqHost: string, listening: AddressInfo[]): string {
   const m = /^localhost(:\d+)?$/i.exec(reqHost);
-  return m ? `127.0.0.1${m[1] ?? ""}` : reqHost;
+  const onV4Loopback = listening.some((a) => ["127.0.0.1", "0.0.0.0", "::"].includes(a.address));
+  return m && onV4Loopback ? `127.0.0.1${m[1] ?? ""}` : reqHost;
 }
 
 export function escapeHtml(s: string): string {
