@@ -135,7 +135,8 @@ async function runScenario(actions: Action[]) {
         break;
       }
       case "commit": {
-        const prov = [...alive].filter(([, v]) => v.provisional).map(([k]) => k);
+        // WebKit only commits provisional pages (a navigation), never workers.
+        const prov = [...alive].filter(([, v]) => v.provisional && v.type === "page").map(([k]) => k);
         if (!prov.length) break;
         const next = prov[a.pick % prov.length]!;
         alive.get(next)!.provisional = false;
@@ -188,6 +189,22 @@ test("every request is answered exactly once under arbitrary orderings (fast-che
       expect(s.toolRequests).toBe(0);
       t.close();
     }),
-    { numRuns: fcRuns(300) },
+    {
+      numRuns: fcRuns(300),
+      // The page-only form of a 100k-run counterexample whose original
+      // committed a provisional worker (WebKit never does): commit a
+      // navigation, add a page, destroy one of them, send.
+      examples: [0, 1, 2, 3].map((pick): [Action[]] => [
+        [
+          { kind: "create", type: "page", provisional: true },
+          { kind: "commit", pick: 0 },
+          { kind: "create", type: "page", provisional: false },
+          { kind: "destroy", pick },
+          { kind: "send" },
+          { kind: "deliver", pick: 0 },
+          { kind: "deliver", pick: 0 },
+        ],
+      ]),
+    },
   );
 }, fcTimeout(30_000));
