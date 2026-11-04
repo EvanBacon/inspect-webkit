@@ -78,18 +78,29 @@ export function buildJsonTarget(args: {
   url: string;
   type: string;
 }): CdpJsonTarget {
-  const wsPath = `${args.reqHost}/devtools/page/${args.id}`;
+  const path = `/devtools/page/${args.id}`;
+  const frontendUrl = `devtools://devtools/bundled/inspector.html?ws=${frontendWsHost(args.reqHost)}${path}`;
   return {
     description: args.description,
-    devtoolsFrontendUrl: `devtools://devtools/bundled/inspector.html?ws=${wsPath}`,
-    devtoolsFrontendUrlCompat: `devtools://devtools/bundled/inspector.html?ws=${wsPath}`,
+    devtoolsFrontendUrl: frontendUrl,
+    devtoolsFrontendUrlCompat: frontendUrl,
     id: args.id,
     title: args.title,
     type: args.type,
     url: args.url,
-    webSocketDebuggerUrl: `ws://${wsPath}`,
+    webSocketDebuggerUrl: `ws://${args.reqHost}${path}`,
     faviconUrl: "",
   };
+}
+
+/**
+ * The bundled DevTools frontend's CSP only lets it dial `ws://127.0.0.1:*`,
+ * so a `?ws=localhost:…` frontend URL opens a DevTools that never connects.
+ * localhost is served on 127.0.0.1 too (the default bind), so point there.
+ */
+function frontendWsHost(reqHost: string): string {
+  const m = /^localhost(:\d+)?$/i.exec(reqHost);
+  return m ? `127.0.0.1${m[1] ?? ""}` : reqHost;
 }
 
 export function escapeHtml(s: string): string {

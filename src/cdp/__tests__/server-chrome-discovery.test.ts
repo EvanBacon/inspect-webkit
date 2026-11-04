@@ -112,3 +112,41 @@ test("server: chrome://inspect sees the page in /json/list", async () => {
   expect(list).toHaveLength(1);
   expect(list[0].webSocketDebuggerUrl).toBe(`ws://127.0.0.1:${port}/devtools/page/sim:fake:PID:1:1`);
 });
+
+// The bundled DevTools frontend's CSP is `connect-src … ws://127.0.0.1:*`:
+// Chrome blocks `devtools://…?ws=localhost:…` before it ever dials, so the
+// frontend opens empty. That was the second half of issue #1 ("use 127.0.0.1
+// instead of localhost"). Native clients use webSocketDebuggerUrl, which
+// keeps the Host they asked with.
+async function listVia(port: number, host: string): Promise<any[]> {
+  const res = await fetch(`http://127.0.0.1:${port}/json/list`, { headers: { Host: host } });
+  return (await res.json()) as any[];
+}
+
+for (const [name, start] of [
+  ["server", startSafari],
+  ["bun-server", startBun],
+] as const) {
+  test(`${name}: devtoolsFrontendUrl dials 127.0.0.1 when asked via localhost (frontend CSP)`, async () => {
+    const port = await start();
+    const [t] = await listVia(port, `localhost:${port}`);
+    expect(t.devtoolsFrontendUrl).toStartWith(`devtools://devtools/bundled/inspector.html?ws=127.0.0.1:${port}/devtools/page/`);
+    expect(t.devtoolsFrontendUrlCompat).toBe(t.devtoolsFrontendUrl);
+    expect(t.webSocketDebuggerUrl).toStartWith(`ws://localhost:${port}/devtools/page/`);
+  });
+
+  test(`${name}: other hosts are kept as asked`, async () => {
+    const port = await start();
+    for (const host of [`127.0.0.1:${port}`, `[::1]:${port}`]) {
+      const [t] = await listVia(port, host);
+      expect(t.devtoolsFrontendUrl).toContain(`?ws=${host}/devtools/page/`);
+    }
+  });
+}
+
+test("server: the index page shows the 127.0.0.1 frontend URL", async () => {
+  const port = await startSafari();
+  const html = await (await fetch(`http://127.0.0.1:${port}/`, { headers: { Host: `localhost:${port}` } })).text();
+  expect(html).toContain(`?ws=127.0.0.1:${port}/devtools/page/`);
+  expect(html).not.toContain(`?ws=localhost:`);
+});

@@ -81,11 +81,16 @@ Alternatively, open `http://localhost:9222/`. It lists a
 into Chrome's address bar. `js_app.html` and `devtools_app.html` work in place
 of `inspector.html` too. Chrome only opens `devtools://` URLs that you type or
 paste: it refuses them as links ("Not allowed to load local resource") and
-ignores them on the command line.
+ignores them on the command line. Keep `ws=127.0.0.1:…`: the frontend's
+Content-Security-Policy only allows `ws://127.0.0.1:*`, so a `ws=localhost:…`
+DevTools opens but never connects. The bridge's URLs use 127.0.0.1 for that
+reason.
 
-> Tested with Chrome 156 on macOS. Versions up to 0.0.5 answered HTTP with
-> chunked bodies, which chrome://inspect's discovery client can't read, so
-> it showed the configured host with no pages under it (issue #1).
+> Tested with Chrome 156 on macOS. Versions up to 0.0.5 had two bugs here
+> (issue #1). They answered HTTP with chunked bodies, which chrome://inspect's
+> discovery client can't read, so it showed the configured host with no
+> pages. They also listed `devtoolsFrontendUrl` with `ws=localhost:…`, which
+> the frontend's CSP blocks.
 
 **DevTools opens but stays empty?** WebKit gives a page to one inspector at a
 time and keeps the first. While Safari's Web Inspector (*Develop* menu) or
