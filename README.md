@@ -156,7 +156,8 @@ holds that one connection and shares it:
 - `X.enable` / `X.disable` are reference-counted. Only the first enable and
   the last disable reach Safari. A client that enables a domain someone
   else already enabled is sent the current execution contexts, parsed
-  scripts, pending pause and console messages first, like a fresh enable;
+  scripts, pending pause and the latest console messages first, like a
+  fresh enable;
 - a client that disconnects releases what only it enabled and removes its
   own breakpoints; the others keep working.
 
@@ -165,6 +166,10 @@ the pause state (any client can resume), pause-on-exceptions and other
 debugger settings (last writer wins), and DOM node ids. A `DOM.getDocument`
 from one client resets the node ids the other clients hold, so two clients
 both using an Elements panel on the same page will disturb each other.
+Page-level overrides also outlive the client that set them while other
+clients stay attached: cache disabling, extra HTTP headers, a user-agent
+override, console object groups. WebKit resets them only when the last
+client leaves.
 
 Before this release, a second client replaced the first, whose WebSocket
 was closed with 1011 "replaced by a newer DevTools session"; that no longer
