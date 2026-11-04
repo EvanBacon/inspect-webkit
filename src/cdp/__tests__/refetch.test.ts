@@ -291,3 +291,25 @@ describe("refetch transport limits (real http client against a local server)", (
     await expect(refetch(`http://127.0.0.1:${port}/echo`, base(), defaultRefetchDeps)).rejects.toThrow(/loopback/);
   });
 });
+
+// The DNS-rebinding defence rests on the runtime honouring http.request's
+// `lookup`: the connection must go to the checked address, never to a fresh
+// resolution of the hostname. Prove it on the runtime the tests run on.
+test("default request pins the connection to the checked address", async () => {
+  const srv = http.createServer((req, res) => res.end(`pinned ${req.headers.host}`));
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+  const port = (srv.address() as AddressInfo).port;
+  try {
+    const r = await defaultRefetchDeps.request({
+      url: new URL(`http://pin-check.invalid:${port}/`),
+      address: "127.0.0.1",
+      family: 4,
+      headers: {},
+      signal: AbortSignal.timeout(3000),
+      maxBytes: 1024,
+    });
+    expect(new TextDecoder().decode(r.body)).toBe(`pinned pin-check.invalid:${port}`);
+  } finally {
+    srv.close();
+  }
+});
