@@ -11,7 +11,7 @@ import { BunInspectorClient } from "../bun/source";
 import type { AddressInfo } from "node:net";
 import {
   type CdpServerBaseOptions,
-  WS_MAX_PAYLOAD,
+  WS_SERVER_LIMITS,
   checkResponseBodyRefetch,
   buildJsonTarget,
   createCdpHttpServer,
@@ -71,7 +71,7 @@ export async function startBunCdpServer(opts: BunCdpServerOptions): Promise<BunC
       ),
   }, { host, allowOrigins: opts.allowOrigins });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
+  const wss = new WebSocketServer({ noServer: true, ...WS_SERVER_LIMITS });
   wss.on("error", (e) => console.error(`# ws server error: ${(e as Error)?.message ?? e}`));
 
   httpServer.onUpgrade((req, socket, head, pathname) => {

@@ -118,8 +118,34 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": "&#39;",
 };
 
-/** Max inbound WebSocket message size for every CDP WebSocket we accept. */
-export const WS_MAX_PAYLOAD = 256 * 1024 * 1024;
+/**
+ * Max inbound WebSocket message size for every CDP WebSocket we accept.
+ * DevTools → target messages are small commands (the large payloads — heap
+ * snapshots, screenshots, script sources — flow target → DevTools, which this
+ * limit doesn't touch), so 16 MiB is generous headroom without letting a
+ * single client pin hundreds of MiB.
+ */
+export const WS_MAX_PAYLOAD = 16 * 1024 * 1024;
+
+/**
+ * Max fragments in one inbound WebSocket message. CDP clients (DevTools,
+ * Puppeteer, Playwright) send each command as a single frame; 1024 still
+ * covers a full WS_MAX_PAYLOAD message chunked at 16 KiB.
+ */
+export const WS_MAX_FRAGMENTS = 1024;
+
+/** Max raw socket chunks ws will queue while waiting for a frame to complete. */
+export const WS_MAX_BUFFERED_CHUNKS = 64 * 1024;
+
+/**
+ * Options for every CDP `WebSocketServer`. Set explicitly rather than relying
+ * on ws's defaults, which vary by version.
+ */
+export const WS_SERVER_LIMITS = {
+  maxPayload: WS_MAX_PAYLOAD,
+  maxFragments: WS_MAX_FRAGMENTS,
+  maxBufferedChunks: WS_MAX_BUFFERED_CHUNKS,
+} as const;
 
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
 

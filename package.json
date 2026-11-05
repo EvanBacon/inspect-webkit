@@ -60,7 +60,7 @@
     "commander": "^14.0.3",
     "fast-check": "^4.10.2",
     "typescript": "^5",
-    "ws": "^8.18.0"
+    "ws": "^8.22.1"
   },
   "peerDependencies": {
     "typescript": "^5"
