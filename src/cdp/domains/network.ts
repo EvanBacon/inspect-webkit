@@ -6,7 +6,7 @@
 // it obvious which fields differ from CDP.
 
 import type { Target, CdpMessage } from "../target";
-import { swallowWith } from "../domain";
+import { isPlainObject, swallowWith } from "../domain";
 import type { IoCache } from "./io";
 
 // CDP -> WIR method renames for pure tools-side passthroughs.
@@ -177,7 +177,7 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
 
   // setCacheDisabled needs a param key rename: { cacheDisabled } -> { disabled }.
   t.addMessageFilter("tools::Network.setCacheDisabled", (msg) => {
-    if (msg.params && "cacheDisabled" in msg.params) {
+    if (isPlainObject(msg.params) && "cacheDisabled" in msg.params) {
       msg.params = { disabled: !!msg.params.cacheDisabled };
     }
     return Promise.resolve(msg);
@@ -486,10 +486,12 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
       return null;
     }
     try {
-      const r = await t.callTarget("Network.loadResource", {
-        frameId: p.frameId,
-        url: p.url,
-      });
+      // Large source maps over USB can legitimately take a while.
+      const r = await t.callTarget(
+        "Network.loadResource",
+        { frameId: p.frameId, url: p.url },
+        60_000,
+      );
       const success = !!r?.content && (r?.status ?? 0) >= 200 && (r?.status ?? 0) < 300;
       let stream: string | undefined;
       if (success) {

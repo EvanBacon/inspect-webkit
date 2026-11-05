@@ -65,9 +65,24 @@ async function openRaw(): Promise<{
   });
 }
 
-async function readFrame(stream: ByteStream): Promise<Uint8Array> {
+/** usbmuxd control replies are small plists; anything bigger is bogus. */
+export const MAX_USBMUX_FRAME = 16 * 1024 * 1024;
+const USBMUX_HEADER = 16;
+
+/** @internal exported for tests. Destroys `socket` on a malformed length. */
+export async function readFrame(
+  stream: ByteStream,
+  socket?: { destroy(): void },
+): Promise<Uint8Array> {
   const lenBuf = await stream.read(4);
   const len = new DataView(lenBuf.buffer, lenBuf.byteOffset, 4).getUint32(0, true);
+  if (len < USBMUX_HEADER || len > MAX_USBMUX_FRAME) {
+    try {
+      socket?.destroy();
+    } catch {}
+    stream.close(new Error(`bad usbmux frame length ${len}`));
+    throw new Error(`bad usbmux frame length ${len}`);
+  }
   // length includes the 16-byte header but only the first 4 bytes have been read
   const rest = await stream.read(len - 4);
   // we want just the plist payload — strip the remaining 12 bytes of header
@@ -82,8 +97,10 @@ function writeFrame(socket: net.Socket, tag: number, body: Uint8Array) {
   dv.setUint32(4, VERSION, true);
   dv.setUint32(8, MESSAGE_PLIST, true);
   dv.setUint32(12, tag, true);
-  socket.write(header);
-  socket.write(body);
+  const out = Buffer.allocUnsafe(total);
+  out.set(header, 0);
+  out.set(body, 16);
+  socket.write(out);
 }
 
 async function sendRecv(
@@ -99,7 +116,7 @@ async function sendRecv(
     ...payload,
   });
   writeFrame(socket, tag, body);
-  const reply = await readFrame(stream);
+  const reply = await readFrame(stream, socket);
   return decodeXml(reply) as Record<string, PlistValue>;
 }
 

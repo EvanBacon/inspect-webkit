@@ -74,6 +74,26 @@ appears under "Remote Target". Click *inspect* to open DevTools attached.
 Run it and pick the page from the dropdown — set breakpoints, evaluate, step
 through, exactly like a normal web target.
 
+**Security.** The bridge is unauthenticated and can run JavaScript in every
+inspectable page, so by default it listens on loopback only (`127.0.0.1` and
+`::1`). It rejects requests whose `Host` header isn't `localhost`, `127.0.0.1`,
+`[::1]` or the `--host` you passed (403, which blocks DNS rebinding). It also
+rejects WebSocket upgrades that carry an `Origin` other than
+`devtools://devtools` (403, so web pages can't drive it). Native clients
+(`chrome://inspect`, VS Code, Puppeteer) send no `Origin` and are unaffected.
+
+- `--host 0.0.0.0` exposes the bridge to your network. Only do that on a
+  network you trust; the bridge prints a warning when you do.
+- `--allow-origin <origin...>` accepts extra WebSocket origins, for example a
+  hosted DevTools frontend. Pass `"*"` to accept any origin.
+
+Only one debugger can drive a WebKit page at a time. If a second DevTools
+client attaches to a page the bridge is already serving, the bridge closes the
+first client's WebSocket with code 1011 and the reason "replaced by a newer
+DevTools session". When the page, its app or the simulator/device goes away,
+the bridge also closes the WebSocket with 1011 and a reason, instead of
+leaving it hanging.
+
 #### Translation layer
 
 The bridge translates between Chrome DevTools Protocol (CDP) and Safari's

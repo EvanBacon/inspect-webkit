@@ -36,20 +36,34 @@ export type WIApplication = {
 
 type WISocket = AnySocket;
 
-async function readMessage(stream: ByteStream): Promise<Record<string, PlistValue>> {
+/** Upper bound on a single WIR frame. Real frames are far smaller; a bogus
+ *  length prefix would otherwise make us buffer up to 4 GiB. */
+export const MAX_WIR_FRAME = 256 * 1024 * 1024;
+
+class FrameTooLargeError extends Error {}
+
+/** Read one length-prefixed frame body (undecoded). */
+async function readFrameBody(stream: ByteStream): Promise<Uint8Array> {
   const lenBuf = await stream.read(4);
   const len = new DataView(lenBuf.buffer, lenBuf.byteOffset, 4).getUint32(0, false);
-  const body = await stream.read(len);
-  return decode(body) as Record<string, PlistValue>;
+  if (len > MAX_WIR_FRAME) {
+    throw new FrameTooLargeError(`webinspector frame length ${len} exceeds ${MAX_WIR_FRAME}`);
+  }
+  return stream.read(len);
 }
 
 function writeMessage(socket: WISocket, msg: Record<string, PlistValue>) {
   const body = encodeXml(msg);
-  const header = new Uint8Array(4);
-  new DataView(header.buffer).setUint32(0, body.length, false);
-  socket.write(header);
-  socket.write(body);
+  // One write per frame: header + body in a single buffer.
+  const out = Buffer.allocUnsafe(4 + body.length);
+  out.writeUInt32BE(body.length, 0);
+  out.set(body, 4);
+  socket.write(out);
 }
+
+const debugLog = (...args: unknown[]) => {
+  if (process.env.INSPECT_WEBKIT_DEBUG) console.error("[webinspector]", ...args);
+};
 
 function uuid(): string {
   // RFC 4122 v4 — webinspector accepts any UUID-shaped string here.
@@ -66,7 +80,9 @@ type Subscriber = (m: WIMessage) => void;
 export class WebInspectorClient {
   private connectionId = uuid();
   private subscribers = new Set<Subscriber>();
+  private closeHandlers = new Set<() => void>();
   private reading: Promise<void>;
+  private _closed = false;
 
   constructor(
     private socket: WISocket,
@@ -75,7 +91,20 @@ export class WebInspectorClient {
     this.reading = (async () => {
       try {
         while (!stream.closed) {
-          const msg = await readMessage(stream);
+          const body = await readFrameBody(stream);
+          let msg: Record<string, PlistValue>;
+          try {
+            const decoded = decode(body);
+            if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+              throw new Error("frame is not a dictionary");
+            }
+            msg = decoded as Record<string, PlistValue>;
+          } catch (e) {
+            // The length prefix already delimited this frame, so the stream
+            // is still in sync — skip it and keep reading.
+            debugLog(`skipping undecodable ${body.length}-byte frame: ${(e as Error)?.message ?? e}`);
+            continue;
+          }
           for (const fn of [...this.subscribers]) {
             try {
               fn(msg);
@@ -84,10 +113,45 @@ export class WebInspectorClient {
             }
           }
         }
-      } catch {
-        // stream closed
+      } catch (e) {
+        if (e instanceof FrameTooLargeError) console.error(`warn: ${e.message}; closing connection`);
+        else debugLog(`stream ended: ${(e as Error)?.message ?? e}`);
+      } finally {
+        this.markClosed();
       }
     })();
+  }
+
+  private markClosed() {
+    if (this._closed) return;
+    this._closed = true;
+    try {
+      this.socket.destroy();
+    } catch {}
+    const handlers = [...this.closeHandlers];
+    this.closeHandlers.clear();
+    for (const h of handlers) {
+      try {
+        h();
+      } catch (e) {
+        console.error(`warn: webinspector close handler threw: ${(e as Error)?.message ?? e}`);
+      }
+    }
+  }
+
+  /** True once the underlying connection has ended (or was torn down). */
+  get closed(): boolean {
+    return this._closed;
+  }
+
+  /** Called once when the connection ends. Fires (async) immediately if already closed. */
+  onClose(cb: () => void): () => void {
+    if (this._closed) {
+      queueMicrotask(cb);
+      return () => {};
+    }
+    this.closeHandlers.add(cb);
+    return () => this.closeHandlers.delete(cb);
   }
 
   /** Subscribe to every message the inspector emits. Returns unsubscribe. */
@@ -96,15 +160,19 @@ export class WebInspectorClient {
     return () => this.subscribers.delete(fn);
   }
 
-  /** Resolve with the first message whose `__selector` matches. */
-  private waitFor(selector: string, timeoutMs = 5000): Promise<WIMessage> {
+  /** Resolve with the first message whose `__selector` matches (and `match`, if given). */
+  private waitFor(
+    selector: string,
+    timeoutMs = 5000,
+    match?: (m: WIMessage) => boolean,
+  ): Promise<WIMessage> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         unsub();
         reject(new Error(`timeout waiting for ${selector} after ${timeoutMs}ms`));
       }, timeoutMs);
       const unsub = this.subscribe((m) => {
-        if (m.__selector === selector) {
+        if (m.__selector === selector && (!match || match(m))) {
           clearTimeout(timer);
           unsub();
           resolve(m);
@@ -114,6 +182,7 @@ export class WebInspectorClient {
   }
 
   send(selector: string, argument: Record<string, PlistValue>) {
+    if (this._closed) return;
     writeMessage(this.socket, {
       __selector: selector,
       __argument: { WIRConnectionIdentifierKey: this.connectionId, ...argument },
@@ -149,7 +218,13 @@ export class WebInspectorClient {
 
   async getListing(appId: string): Promise<WIPage[]> {
     this.send("_rpc_forwardGetListing:", { WIRApplicationIdentifierKey: appId });
-    const m = await this.waitFor("_rpc_applicationSentListing:", 3000).catch(() => null);
+    const m = await this.waitFor(
+      "_rpc_applicationSentListing:",
+      3000,
+      (msg) =>
+        (msg.__argument as Record<string, PlistValue> | undefined)?.WIRApplicationIdentifierKey ===
+        appId,
+    ).catch(() => null);
     if (!m) return [];
     const arg = m.__argument as Record<string, PlistValue>;
     const listing = (arg.WIRListingKey as Record<string, PlistValue>) ?? {};
@@ -208,6 +283,9 @@ export class WebInspectorClient {
   }
 
   close() {
-    this.socket.end();
+    try {
+      this.socket.end();
+    } catch {}
+    this.markClosed();
   }
 }

@@ -11,11 +11,12 @@
 // trials, but the underlying page may still need a Safari restart afterward
 // for normal use. Don't run this against a production debugging session.
 
-const wsUrl = process.argv[2];
-if (!wsUrl) {
+const wsUrlArg = process.argv[2];
+if (!wsUrlArg) {
   console.error("usage: bun scripts/e2e/cdp-throughput.ts <wsUrl>");
   process.exit(2);
 }
+const wsUrl: string = wsUrlArg;
 
 async function trial(n: number) {
   let nextId = 0;

@@ -36,7 +36,31 @@ type Filter = (msg: CdpMessage) => Promise<CdpMessage | null>;
 type Pending = {
   resolve: (v: any) => void;
   reject: (e: any) => void;
+  timer: ReturnType<typeof setTimeout>;
 };
+
+/** Default deadline for adapter-initiated callTarget() round-trips. */
+export const CALL_TARGET_TIMEOUT_MS = 10_000;
+
+const debug = (...args: unknown[]) => {
+  if (process.env.INSPECT_WEBKIT_DEBUG) console.error("[cdp]", ...args);
+};
+
+/** Parse a CDP frame; null unless it is a plain JSON object. */
+function parseFrame(raw: string): CdpMessage | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return null;
+  return v as CdpMessage;
+}
+
+function errMessage(e: unknown): string {
+  return (e as Error)?.message ?? String(e);
+}
 
 export class Target {
   private filters = new Map<string, Filter[]>();
@@ -55,6 +79,9 @@ export class Target {
   // so we hold them until the first Target.targetCreated arrives.
   private outgoingQueue: string[] = [];
   private sawAnyTargetCreated = false;
+  private closedReason: string | null = null;
+  /** Deadline for callTarget(); override per instance (tests, slow devices). */
+  callTimeoutMs = CALL_TARGET_TIMEOUT_MS;
 
   constructor(
     private ws: WSWebSocket,
@@ -70,13 +97,41 @@ export class Target {
     list.push(filter);
   }
 
-  /** Adapter-initiated call into Safari, awaitable. Uses a negative id. */
-  callTarget(method: string, params: any = {}): Promise<any> {
+  /** Adapter-initiated call into Safari, awaitable. Uses a negative id.
+   *  Rejects after `callTimeoutMs`, or when the session closes. */
+  callTarget(method: string, params: any = {}, timeoutMs = this.callTimeoutMs): Promise<any> {
+    if (this.closedReason !== null) {
+      return Promise.reject(new Error(`${method}: ${this.closedReason}`));
+    }
     return new Promise((resolve, reject) => {
       const id = --this.requestId;
-      this.adapterRequestMap.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (this.adapterRequestMap.delete(id)) {
+          reject(new Error(`${method} timed out after ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+      this.adapterRequestMap.set(id, { resolve, reject, timer });
       this.sendRaw(JSON.stringify({ id, method, params }));
     });
+  }
+
+  /** Session teardown: reject every pending callTarget and stop sending. */
+  close(reason = "session closed") {
+    if (this.closedReason !== null) return;
+    this.closedReason = reason;
+    const pending = [...this.adapterRequestMap.values()];
+    this.adapterRequestMap.clear();
+    for (const p of pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error(reason));
+    }
+    this.outgoingQueue = [];
+    this.toolRequestMap.clear();
+    this.wrappedAckIds.clear();
+  }
+
+  get closed(): boolean {
+    return this.closedReason !== null;
   }
 
   fireEventToTools(method: string, params: any) {
@@ -98,38 +153,64 @@ export class Target {
     return Promise.resolve(null);
   }
 
-  /** Called by the server when the DevTools client sends a frame. */
-  async onMessageFromTools(rawMessage: string) {
-    let msg: CdpMessage;
-    try {
-      msg = JSON.parse(rawMessage);
-    } catch {
+  /** Called by the server when the DevTools client sends a frame.
+   *  Never rejects: a filter that throws turns into a CDP error reply. */
+  async onMessageFromTools(rawMessage: string): Promise<void> {
+    if (this.closedReason !== null) return;
+    const msg = parseFrame(rawMessage);
+    if (!msg) {
+      debug(`ignoring non-object tools frame: ${String(rawMessage).slice(0, 80)}`);
       return;
     }
-    if (typeof msg.method === "string" && typeof msg.id === "number") {
-      this.toolRequestMap.set(msg.id, msg.method);
-    }
-    const eventName = `tools::${msg.method}`;
-    const list = this.filters.get(eventName);
-    let outgoing: CdpMessage | null = msg;
-    if (list) {
-      for (const f of list) {
-        if (!outgoing) break;
-        outgoing = await f(outgoing);
+    const id = typeof msg.id === "number" ? msg.id : undefined;
+    try {
+      if (typeof msg.method === "string" && id !== undefined) {
+        this.toolRequestMap.set(id, msg.method);
+      }
+      const list = typeof msg.method === "string" ? this.filters.get(`tools::${msg.method}`) : undefined;
+      let outgoing: CdpMessage | null = msg;
+      if (list) {
+        for (const f of list) {
+          if (!outgoing) break;
+          outgoing = await f(outgoing);
+        }
+      }
+      if (outgoing) this.sendRaw(JSON.stringify(outgoing));
+    } catch (e) {
+      console.error(`# cdp: tools filter for ${String(msg.method)} threw: ${errMessage(e)}`);
+      if (id !== undefined) {
+        this.toolRequestMap.delete(id);
+        this.fireErrorToTools(id, {
+          code: e instanceof TypeError ? -32602 : -32000,
+          message: `${String(msg.method)}: ${errMessage(e)}`,
+        });
       }
     }
-    if (outgoing) this.sendRaw(JSON.stringify(outgoing));
   }
 
   /** Called by the WebInspector pump when a forward-socket frame arrives
    *  for THIS sender. */
   async onMessageFromTarget(rawMessage: string): Promise<void> {
-    let msg: CdpMessage;
-    try {
-      msg = JSON.parse(rawMessage);
-    } catch {
+    if (this.closedReason !== null) return;
+    const msg = parseFrame(rawMessage);
+    if (!msg) {
+      debug(`ignoring non-object target frame: ${String(rawMessage).slice(0, 80)}`);
       return;
     }
+    try {
+      await this.handleFromTarget(msg, rawMessage);
+    } catch (e) {
+      // A target-side filter choked on an unexpected Safari payload. Pass
+      // the untranslated message through: an un-translated reply beats a
+      // request that never gets answered.
+      console.error(
+        `# cdp: target filter for ${String(msg.method ?? `id ${msg.id}`)} threw: ${errMessage(e)}`,
+      );
+      this.sendToTools(rawMessage);
+    }
+  }
+
+  private async handleFromTarget(msg: CdpMessage, rawMessage: string): Promise<void> {
 
     // Target-based mode: pick up the inner page targetId once, then
     // unwrap dispatched messages.
@@ -172,6 +253,7 @@ export class Target {
       const adapterPending = this.adapterRequestMap.get(msg.id);
       if (adapterPending) {
         this.adapterRequestMap.delete(msg.id);
+        clearTimeout(adapterPending.timer);
         if ("error" in msg && msg.error) adapterPending.reject(msg.error);
         else adapterPending.resolve(msg.result ?? {});
         return;
@@ -266,6 +348,7 @@ export class Target {
   }
 
   private writeFrame(payload: string) {
+    if (this.closedReason !== null) return;
     this.wi.forwardSocketData(
       this.appId,
       this.pageId,
@@ -275,6 +358,7 @@ export class Target {
   }
 
   private sendToTools(rawMessage: string) {
+    if (this.closedReason !== null) return;
     if (this.ws.readyState === 1) this.ws.send(rawMessage);
   }
 }

@@ -34,17 +34,15 @@ function escapeXml(s: string): string {
 }
 
 function b64encode(bytes: Uint8Array): string {
-  // Bun supports Buffer; this avoids a node import
-  let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]!);
-  return btoa(s);
+  // Native base64 (Buffer is a global in Bun and Node). The old per-byte
+  // String.fromCharCode + btoa loop dominated large tools->page uploads.
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
 }
 
 function b64decode(s: string): Uint8Array {
-  const bin = atob(s.replace(/\s+/g, ""));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  // Buffer's base64 decoder skips whitespace (plist <data> is line-wrapped).
+  const buf = Buffer.from(s, "base64");
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
 function encodeValue(v: PlistValue, indent: string): string {

@@ -30,6 +30,12 @@ export function makeDomainCtx(): DomainCtx {
   };
 }
 
+/** True for `{...}` values (not null, arrays, or primitives). Filters use
+ *  this before touching `msg.params` — clients can send anything. */
+export function isPlainObject(v: unknown): v is Record<string, any> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
 /** Reply to a tools-side request with `result` and swallow the message so
  *  it's never forwarded to Safari. Used by ack-and-stub filters. */
 export function swallowWith(

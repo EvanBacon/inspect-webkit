@@ -132,7 +132,7 @@ test("browser-scope events carry the browser sessionId once allocated", () => {
   // Spontaneous targetCreated also carries it.
   const created = ws.byMethod("Target.targetCreated");
   expect(created.length).toBe(1);
-  expect(created[0].sessionId).toBe(browserSid);
+  expect(created[0]!.sessionId).toBe(browserSid);
 });
 
 test("setAutoAttach attaches existing pages and emits attachedToTarget", () => {
@@ -172,12 +172,12 @@ test("flatten-mode page command routes to the correct session and reply gets the
   });
 
   // Page session received the command without sessionId.
-  expect(pages[0].inbox.length).toBe(1);
-  const inner = JSON.parse(pages[0].inbox[0]);
+  expect(pages[0]!.inbox.length).toBe(1);
+  const inner = JSON.parse(pages[0]!.inbox[0]!);
   expect(inner).toEqual({ id: 99, method: "Runtime.evaluate", params: { expression: "1+2" } });
 
   // Page session response gets sessionId injected on the way out.
-  pages[0].send(JSON.stringify({ id: 99, result: { value: 3 } }));
+  pages[0]!.send(JSON.stringify({ id: 99, result: { value: 3 } }));
   const reply = ws.sent.find((f) => f.id === 99 && f.sessionId === pageSid);
   expect(reply).toBeTruthy();
   expect(reply!.result).toEqual({ value: 3 });
@@ -197,7 +197,7 @@ test("legacy Target.sendMessageToTarget forwards the inner payload", () => {
   });
 
   expect(ws.byId(2)!.result).toEqual({});
-  expect(pages[0].inbox).toEqual([inner]);
+  expect(pages[0]!.inbox).toEqual([inner]);
 });
 
 test("Target.detachFromTarget closes the page session and emits detachedFromTarget", () => {
@@ -209,10 +209,10 @@ test("Target.detachFromTarget closes the page session and emits detachedFromTarg
   ws.feed({ id: 2, method: "Target.detachFromTarget", params: { sessionId: pageSid } });
 
   expect(ws.byId(2)!.result).toEqual({});
-  expect(pages[0].closed).toBe(true);
+  expect(pages[0]!.closed).toBe(true);
   const det = ws.byMethod("Target.detachedFromTarget");
   expect(det.length).toBe(1);
-  expect(det[0].params).toEqual({ sessionId: pageSid, targetId: PAGE_A.targetId });
+  expect(det[0]!.params).toEqual({ sessionId: pageSid, targetId: PAGE_A.targetId });
 });
 
 test("attachToTarget on unknown target id returns -32000", () => {
@@ -257,4 +257,54 @@ test("ws close tears down all page sessions", () => {
   ws.emit("close");
 
   expect(pages.every((p) => p.closed)).toBe(true);
+});
+
+// --- Robustness regressions -------------------------------------------------
+
+for (const raw of ["null", "1", '"s"', "[]", "true"]) {
+  test(`non-object frame ${raw} on the browser endpoint is ignored (R2)`, () => {
+    const { ws } = makeRig([PAGE_A]);
+    expect(() => ws.emit("message", Buffer.from(raw), false)).not.toThrow();
+    // Endpoint still works afterwards.
+    ws.feed({ id: 1, method: "Browser.getVersion" });
+    expect(ws.byId(1)?.result).toBeTruthy();
+  });
+}
+
+test("browser endpoint installs a ws error listener", () => {
+  const { ws } = makeRig([]);
+  expect(ws.listenerCount("error")).toBeGreaterThan(0);
+  expect(() => ws.emit("error", new Error("invalid frame"))).not.toThrow();
+});
+
+test("a page session closed by the server is detached from the client (R6)", () => {
+  let entries = [PAGE_A];
+  const ws = new FakeWs();
+  let serverClose: ((reason: string) => void) | undefined;
+  let closed = false;
+  attachBrowserWs(ws as any, {
+    listEntries: () => entries,
+    createPageSession: (_targetId, _send, onServerClose) => {
+      serverClose = onServerClose;
+      return {
+        onMessageFromTools() {},
+        close() {
+          closed = true;
+        },
+      };
+    },
+    refreshMs: 60_000,
+  });
+  ws.feed({ id: 1, method: "Target.attachToTarget", params: { targetId: PAGE_A.targetId } });
+  const sid = ws.byId(1)!.result.sessionId as string;
+  expect(typeof serverClose).toBe("function");
+  serverClose!("source disconnected");
+  const det = ws.byMethod("Target.detachedFromTarget");
+  expect(det.length).toBe(1);
+  expect(det[0]!.params.sessionId).toBe(sid);
+  expect(closed).toBe(true);
+  // A subsequent command on that session reports not-found instead of hanging.
+  ws.feed({ id: 2, sessionId: sid, method: "Runtime.evaluate", params: { expression: "1" } });
+  expect(ws.byId(2)?.error?.message).toMatch(/not found/);
+  entries = [];
 });
