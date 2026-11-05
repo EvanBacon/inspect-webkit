@@ -12,8 +12,15 @@
 //   - Flatten mode (modern js-debug): commands carry top-level sessionId,
 //     responses/events carry the same. We strip on inbound forward, inject
 //     on outbound. Non-flatten Target.sendMessageToTarget also accepted.
+//
+// Page sessions share the page with any other client (PageChannel), so
+// attaching never takes a page away from anyone. Their lifetime is driven
+// by the server: a target that drops out of one listing keeps its session
+// (navigation listings are briefly incomplete); the server ends it once the
+// page is really gone, and only then is the target reported destroyed.
 
 import type { WebSocket as WSWebSocket } from "ws";
+import { capture } from "../capture";
 
 export type BrowserEntry = {
   targetId: string;
@@ -32,15 +39,12 @@ export type BrowserEndpointOptions = {
   /**
    * Spin up a per-page CDP session that delivers responses/events via
    * `send`. The server calls `onServerClose` when it tears the session
-   * down itself (source/app/page gone, replaced by another client).
+   * down itself (source/app/page gone).
    */
   createPageSession: (
     targetId: string,
     send: (text: string) => void,
     onServerClose: (reason: string) => void,
-    /** True for implicit (setAutoAttach / discovery) attaches, which must
-     *  not take a page away from another client's live session. */
-    opts?: { auto: boolean },
   ) => PageSessionHandle | null;
   refreshMs?: number;
 };
@@ -57,15 +61,13 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
   // with that sessionId in flatten mode. We allocate one per connection and
   // recurse browser-level routing through it.
   let browserSessionId: string | null = null;
-  // Targets the server detached us from (e.g. another client took the
-  // page). Auto-attach must not immediately grab them back, or two
-  // clients would ping-pong the page forever. Cleared when the target
-  // leaves the listing or the client attaches explicitly.
-  const serverDetached = new Set<string>();
+
+  const capSession = capture.on ? capture.session("browser") : "";
 
   function send(obj: any): void {
     if (ws.readyState !== 1) return;
     const s = JSON.stringify(obj);
+    if (capture.on) capture.cdp("out", capSession, s);
     if (debug) console.error(`[browser] tools<< ${s.slice(0, 240)}`);
     ws.send(s);
   }
@@ -97,7 +99,6 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
   function attachToTarget(
     targetId: string,
     waitingForDebugger: boolean,
-    auto = false,
   ): { sessionId: string; entry: BrowserEntry } | null {
     const entry = opts.listEntries().find((e) => e.targetId === targetId);
     if (!entry) return null;
@@ -116,13 +117,12 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
       const sess = sessions.get(sessionId);
       if (!sess) return;
       if (debug) console.error(`[browser] session ${sessionId} closed by server: ${reason}`);
-      serverDetached.add(targetId);
       sessions.delete(sessionId);
       try {
         sess.handle.close(); // idempotent; the server already released the page
       } catch {}
       emitBrowserEvent("Target.detachedFromTarget", { sessionId, targetId });
-    }, { auto });
+    });
     if (!handle) return null;
     sessions.set(sessionId, { handle, targetId });
     emitBrowserEvent("Target.attachedToTarget", {
@@ -157,8 +157,8 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
             targetInfo: targetInfo(e, isAttached(e.targetId)),
           });
         }
-        if (autoAttach && !isAttached(e.targetId) && !serverDetached.has(e.targetId)) {
-          attachToTarget(e.targetId, waitForDebuggerOnStart, true);
+        if (autoAttach && !isAttached(e.targetId)) {
+          attachToTarget(e.targetId, waitForDebuggerOnStart);
         }
       } else if (prev.title !== e.title || prev.url !== e.url) {
         known.set(e.targetId, e);
@@ -170,10 +170,10 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
       }
     }
     for (const id of [...known.keys()]) {
-      if (seen.has(id)) continue;
+      // Missing from this listing but still attached: the server decides
+      // when the page is gone (and then detaches the session).
+      if (seen.has(id) || isAttached(id)) continue;
       known.delete(id);
-      serverDetached.delete(id);
-      for (const [sid, s] of sessions) if (s.targetId === id) detach(sid);
       if (discoverEnabled) {
         emitBrowserEvent("Target.targetDestroyed", { targetId: id });
       }
@@ -246,20 +246,17 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
         // (chrome-devtools-mcp) believe there are no pages.
         if (autoAttach) {
           for (const e of opts.listEntries()) {
-            if (!isAttached(e.targetId) && !serverDetached.has(e.targetId))
-              attachToTarget(e.targetId, waitForDebuggerOnStart, true);
+            if (!isAttached(e.targetId)) attachToTarget(e.targetId, waitForDebuggerOnStart);
           }
         }
         if (typeof id === "number") reply(envelopeSessionId, { id, result: {} });
         return;
       }
       case "Target.attachToTarget": {
-        // WebKit's webinspectord allows only one sender (forwardSocketSetup)
-        // per page. If we've already attached (e.g., via setAutoAttach), a
-        // second attachToTarget that creates a fresh forwardSocketSetup
-        // gets silently ignored by Safari. chrome-devtools-mcp's
-        // UniverseManager re-attaches periodically, which used to wedge
-        // the Universe's CDP traffic. Reuse the existing sessionId.
+        // One session per target per browser connection: if we've already
+        // attached (e.g. via setAutoAttach), reuse that sessionId.
+        // chrome-devtools-mcp's UniverseManager re-attaches periodically
+        // and expects the same session back.
         for (const [sid, s] of sessions) {
           if (s.targetId === params.targetId) {
             if (typeof id === "number")
@@ -267,7 +264,6 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
             return;
           }
         }
-        serverDetached.delete(params.targetId);
         const r = attachToTarget(params.targetId, false);
         if (!r) {
           if (typeof id === "number") {
@@ -337,6 +333,7 @@ export function attachBrowserWs(ws: WSWebSocket, opts: BrowserEndpointOptions): 
 
   function onMessage(raw: Buffer, isBinary: boolean) {
     const text = isBinary ? new TextDecoder().decode(raw) : raw.toString();
+    if (capture.on) capture.cdp("in", capSession, text);
     if (debug) console.error(`[browser] tools>> ${text.slice(0, 240)}`);
     let msg: any;
     try {

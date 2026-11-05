@@ -1,0 +1,7 @@
+AT{"method":"Runtime.enable","params":{}}
+T{"method":"Debugger.enable","params":{}}
+T{"method":"Debugger.setPauseOnDebuggerStatements","params":{"enabled":false}}
+T{"method":"Debugger.disable","params":{}}
+T{"method":"Debugger.enable","params":{}}
+T{"method":"Runtime.evaluate","params":{"expression":"(function(){ debugger; return 42; })()","returnByValue":true}}
+T{"method":"Debugger.resume","params":{}}

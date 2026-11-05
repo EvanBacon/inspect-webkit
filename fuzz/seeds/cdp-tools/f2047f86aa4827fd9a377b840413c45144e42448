@@ -1,0 +1,16 @@
+QT{"method":"Network.setCacheDisabled","params":{"cacheDisabled":true}}
+T{"method":"Network.setUserAgentOverride","params":{"userAgent":"inspect-webkit-probe/1"}}
+T{"method":"Network.setExtraHTTPHeaders","params":{"headers":{"x-probe":"1"}}}
+T{"method":"Network.setBlockedURLs","params":{"urls":[]}}
+T{"method":"Network.emulateNetworkConditions","params":{"offline":false,"latency":0,"downloadThroughput":-1,"uploadThroughput":-1}}
+T{"method":"Network.canEmulateNetworkConditions","params":{}}
+T{"method":"Network.setMonitoringXHREnabled","params":{"enabled":true}}
+T{"method":"Network.setCookie","params":{"name":"sdtprobe","value":"1","domain":"example.com","path":"/"}}
+T{"method":"Network.deleteCookies","params":{"name":"sdtprobe","domain":"example.com","path":"/"}}
+T{"method":"Network.clearBrowserCookies","params":{}}
+T{"method":"Network.getResponseBody","params":{"requestId":"0"}}
+T{"method":"Page.captureScreenshot","params":{}}
+T{"method":"Page.startScreencast","params":{"format":"png","quality":50}}
+T{"method":"Emulation.setDeviceMetricsOverride","params":{"width":390,"height":844,"deviceScaleFactor":3,"mobile":true}}
+T{"method":"CSS.getMatchedStylesForNode","params":{"nodeId":1}}
+T{"method":"CSS.getInlineStylesForNode","params":{"nodeId":1}}

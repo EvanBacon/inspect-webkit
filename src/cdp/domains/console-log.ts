@@ -18,11 +18,16 @@ export function installConsoleLogFilters(t: Target, ctx: DomainCtx) {
     msg.method = "Console.clearMessages";
     return Promise.resolve(msg);
   });
+  // Console is on because of an explicit Log.enable (vs. only implied by
+  // Runtime.enable, below).
+  let logEnabled = false;
   t.addMessageFilter("tools::Log.disable", (msg) => {
+    logEnabled = false;
     msg.method = "Console.disable";
     return Promise.resolve(msg);
   });
   t.addMessageFilter("tools::Log.enable", (msg) => {
+    logEnabled = true;
     msg.method = "Console.enable";
     return Promise.resolve(msg);
   });
@@ -31,8 +36,15 @@ export function installConsoleLogFilters(t: Target, ctx: DomainCtx) {
   // js-debug attaches with just Runtime.enable, so without this side-effect
   // call Console.messageAdded never fires and the Debug Console stays empty.
   // Pass-through Runtime.enable unchanged; kick Console.enable in parallel.
+  // Runtime.disable undoes it (unless Log.enable asked for Console too), so
+  // a client that disables Runtime stops getting consoleAPICalled — and,
+  // on a shared page, stops holding the Console domain for others.
   t.addMessageFilter("tools::Runtime.enable", (msg) => {
     t.callTarget("Console.enable", {}).catch(() => {});
+    return Promise.resolve(msg);
+  });
+  t.addMessageFilter("tools::Runtime.disable", (msg) => {
+    if (!logEnabled) t.callTarget("Console.disable", {}).catch(() => {});
     return Promise.resolve(msg);
   });
   // Safari emits everything through Console.messageAdded (a single event

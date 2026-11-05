@@ -7,6 +7,8 @@ import * as net from "node:net";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 
+import { RESPONSE_BODY_REFETCH_MODES, type ResponseBodyRefetch } from "./refetch";
+
 export type CdpServerBaseOptions = {
   port?: number;
   /**
@@ -21,7 +23,25 @@ export type CdpServerBaseOptions = {
    * accepted.
    */
   allowOrigins?: string[];
+  /**
+   * Network.getResponseBody falls back to re-fetching the URL from this
+   * machine when WebKit can't return the body. The URL is chosen by the
+   * inspected page, so the fallback is restricted:
+   * - "public" (default): http(s) to public internet addresses only;
+   *   loopback, link-local and private networks are refused.
+   * - "any": also loopback / LAN (e.g. a local dev server), but never the
+   *   bridge's own ports.
+   * - "off": never re-fetch; only WebKit's own answer is used.
+   */
+  responseBodyRefetch?: ResponseBodyRefetch;
 };
+
+/** Validate `responseBodyRefetch` (it may come from untyped JS / a CLI). */
+export function checkResponseBodyRefetch(v: unknown): ResponseBodyRefetch {
+  if (v === undefined) return "public";
+  if (typeof v === "string" && (RESPONSE_BODY_REFETCH_MODES as readonly string[]).includes(v)) return v as ResponseBodyRefetch;
+  throw new TypeError(`responseBodyRefetch must be one of ${RESPONSE_BODY_REFETCH_MODES.join(", ")} (got ${String(v)})`);
+}
 
 export type CdpJsonTarget = {
   description: string;
@@ -57,19 +77,33 @@ export function buildJsonTarget(args: {
   title: string;
   url: string;
   type: string;
+  /** The addresses the server listens on (for the frontend URL's host). */
+  listening: AddressInfo[];
 }): CdpJsonTarget {
-  const wsPath = `${args.reqHost}/devtools/page/${args.id}`;
+  const path = `/devtools/page/${args.id}`;
+  const frontendUrl = `devtools://devtools/bundled/inspector.html?ws=${frontendWsHost(args.reqHost, args.listening)}${path}`;
   return {
     description: args.description,
-    devtoolsFrontendUrl: `devtools://devtools/bundled/inspector.html?ws=${wsPath}`,
-    devtoolsFrontendUrlCompat: `devtools://devtools/bundled/inspector.html?ws=${wsPath}`,
+    devtoolsFrontendUrl: frontendUrl,
+    devtoolsFrontendUrlCompat: frontendUrl,
     id: args.id,
     title: args.title,
     type: args.type,
     url: args.url,
-    webSocketDebuggerUrl: `ws://${wsPath}`,
+    webSocketDebuggerUrl: `ws://${args.reqHost}${path}`,
     faviconUrl: "",
   };
+}
+
+/**
+ * The bundled DevTools frontend's CSP only lets it dial `ws://127.0.0.1:*`,
+ * so a `?ws=localhost:…` frontend URL opens a DevTools that never connects.
+ * Point at 127.0.0.1 instead when we listen there (the default bind does).
+ */
+function frontendWsHost(reqHost: string, listening: AddressInfo[]): string {
+  const m = /^localhost(:\d+)?$/i.exec(reqHost);
+  const onV4Loopback = listening.some((a) => ["127.0.0.1", "0.0.0.0", "::"].includes(a.address));
+  return m && onV4Loopback ? `127.0.0.1${m[1] ?? ""}` : reqHost;
 }
 
 export function escapeHtml(s: string): string {
@@ -84,8 +118,34 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": "&#39;",
 };
 
-/** Max inbound WebSocket message size for every CDP WebSocket we accept. */
-export const WS_MAX_PAYLOAD = 256 * 1024 * 1024;
+/**
+ * Max inbound WebSocket message size for every CDP WebSocket we accept.
+ * DevTools → target messages are small commands (the large payloads — heap
+ * snapshots, screenshots, script sources — flow target → DevTools, which this
+ * limit doesn't touch), so 16 MiB is generous headroom without letting a
+ * single client pin hundreds of MiB.
+ */
+export const WS_MAX_PAYLOAD = 16 * 1024 * 1024;
+
+/**
+ * Max fragments in one inbound WebSocket message. CDP clients (DevTools,
+ * Puppeteer, Playwright) send each command as a single frame; 1024 still
+ * covers a full WS_MAX_PAYLOAD message chunked at 16 KiB.
+ */
+export const WS_MAX_FRAGMENTS = 1024;
+
+/** Max raw socket chunks ws will queue while waiting for a frame to complete. */
+export const WS_MAX_BUFFERED_CHUNKS = 64 * 1024;
+
+/**
+ * Options for every CDP `WebSocketServer`. Set explicitly rather than relying
+ * on ws's defaults, which vary by version.
+ */
+export const WS_SERVER_LIMITS = {
+  maxPayload: WS_MAX_PAYLOAD,
+  maxFragments: WS_MAX_FRAGMENTS,
+  maxBufferedChunks: WS_MAX_BUFFERED_CHUNKS,
+} as const;
 
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
 
@@ -233,11 +293,21 @@ export class CdpHttpServer {
       } catch (e) {
         console.error(`# http handler error: ${(e as Error)?.message ?? e}`);
         try {
-          if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain" });
-          res.end("internal error");
+          if (!res.headersSent) send(res, 500, "text/plain", "internal error");
+          else res.end();
         } catch {}
       }
     };
+  }
+
+  /** @internal Serve one request in-process, as if it arrived on a socket (fuzzing). */
+  dispatch(req: http.IncomingMessage, res: http.ServerResponse): void {
+    this.requestListener(req, res);
+  }
+
+  /** @internal Handle one upgrade in-process, as if it arrived on a socket (fuzzing). */
+  dispatchUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+    this.handleUpgrade(req, socket, head);
   }
 
   /** Register the WebSocket upgrade handler (called with a validated pathname). */
@@ -248,15 +318,11 @@ export class CdpHttpServer {
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
     const reqHost = req.headers.host ?? "";
     if (!this.guard.hostAllowed(req.headers.host)) {
-      res.writeHead(403, { "content-type": "text/plain" });
-      res.end("forbidden: Host header not allowed\n");
-      return;
+      return send(res, 403, "text/plain", "forbidden: Host header not allowed\n");
     }
     const pathname = safePathname(req.url);
     if (pathname == null) {
-      res.writeHead(400, { "content-type": "text/plain" });
-      res.end("bad request\n");
-      return;
+      return send(res, 400, "text/plain", "bad request\n");
     }
     const routes = this.routes;
     if (pathname === "/json/version") {
@@ -269,8 +335,7 @@ export class CdpHttpServer {
     if (pathname === "/json/protocol") return sendJson(res, {});
     if (pathname === "/") return sendIndexHtml(res, routes, reqHost);
 
-    res.writeHead(404, { "content-type": "text/plain" });
-    res.end("not found");
+    send(res, 404, "text/plain", "not found");
   }
 
   private handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -394,9 +459,22 @@ export function createCdpHttpServer(
   return new CdpHttpServer(routes, guardOpts);
 }
 
+/**
+ * Every answer carries an explicit Content-Length. Chrome's chrome://inspect
+ * poller frames bodies by Content-Length only and reads a chunked answer
+ * (what Bun's node:http sends without one) as empty: no targets (issue #1).
+ */
+function send(res: http.ServerResponse, status: number, type: string, body: string): void {
+  res.writeHead(status, {
+    "Content-Type": type,
+    "Content-Length": Buffer.byteLength(body),
+  });
+  res.end(body);
+}
+
 function sendJson(res: http.ServerResponse, body: unknown, status = 200): void {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(body));
+  // Serialize first: a failure must still be able to answer 500.
+  send(res, status, "application/json; charset=utf-8", JSON.stringify(body));
 }
 
 function sendIndexHtml(
@@ -410,15 +488,16 @@ function sendIndexHtml(
       (t) =>
         `<li><strong>${escapeHtml(t.title || t.url || t.id)}</strong><br>` +
         `<small>${escapeHtml(t.url)}</small><br>` +
-        `<small>copy &amp; paste into Chrome's address bar:</small><br>` +
+        `<small>copy &amp; paste into Chrome's address bar (Chrome won't open devtools:// from a link):</small><br>` +
         `<code style="user-select:all">${escapeHtml(t.devtoolsFrontendUrl)}</code></li>`,
     )
     .join("");
   const heading = `inspect-webkit${routes.brand ? ` (${routes.brand})` : ""}`;
   const note =
     routes.indexNote ??
-    `<p>Open <code style="display:inline;padding:1px 4px">chrome://inspect</code> → <em>Configure…</em> → add ` +
-      `<code style="display:inline;padding:1px 4px">${escapeHtml(reqHost)}</code>.</p>`;
+    `<p>Open <code style="display:inline;padding:1px 4px">chrome://inspect/#devices</code> → ` +
+      `<em>Discover network targets: Configure…</em> → add ` +
+      `<code style="display:inline;padding:1px 4px">${escapeHtml(reqHost)}</code> → <em>Done</em>, then click <em>inspect</em>.</p>`;
   const body =
     `<!doctype html><meta charset=utf-8><title>${escapeHtml(heading)}</title>` +
     `<style>body{font:14px -apple-system,sans-serif;max-width:760px;margin:2em auto;padding:0 1em}` +
@@ -428,8 +507,7 @@ function sendIndexHtml(
     note +
     `<ul>${list}</ul>` +
     `<hr><p>JSON: <a href="/json/list">/json/list</a> · <a href="/json/version">/json/version</a></p>`;
-  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(body);
+  send(res, 200, "text/html; charset=utf-8", body);
 }
 
 export function logCdpServerBanner(opts: { brand: string; host: string; port: number }): void {
@@ -441,8 +519,17 @@ export function logCdpServerBanner(opts: { brand: string; host: string; port: nu
   const cyan = (s: string) => c("36", s);
   const green = (s: string) => c("32", s);
 
-  const url = `http://${opts.host}:${opts.port}`;
-  console.error(`${green("●")} ${bold(`${opts.brand} CDP`)} ${cyan(url)}`);
-  console.error(`  ${dim("chrome")}  chrome://inspect → ${opts.host}:${opts.port}`);
-  console.error(`  ${dim("vscode")}  "type": "chrome", "port": ${opts.port}`);
+  // What a client on this machine should dial: a wildcard bind is reachable
+  // as localhost; IPv6 literals need brackets.
+  const bare = opts.host.replace(/^\[|\]$/g, "");
+  const dial = isWildcardHost(bare) ? "localhost" : bare.includes(":") ? `[${bare}]` : bare;
+  const hostPort = `${dial}:${opts.port}`;
+  console.error(`${green("●")} ${bold(`${opts.brand} CDP`)} ${cyan(`http://${hostPort}`)}`);
+  console.error(
+    `  ${dim("chrome")}  open chrome://inspect/#devices → Discover network targets: Configure… → add ${hostPort} → Done, then click "inspect"`,
+  );
+  console.error(
+    `          or paste a page's devtools:// URL from ${cyan(`http://${hostPort}/`)} into the address bar (links and command-line URLs are blocked)`,
+  );
+  console.error(`  ${dim("vscode")}  "type": "chrome", "request": "attach", "port": ${opts.port}`);
 }

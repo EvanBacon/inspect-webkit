@@ -1,0 +1,16 @@
+AT{"method":"Network.enable","params":{"maxPostDataSize":65536}}
+T{"method":"Page.enable","params":{}}
+T{"method":"Page.getResourceTree","params":{}}
+T{"method":"Runtime.enable","params":{}}
+T{"method":"Debugger.enable","params":{"maxScriptsCacheSize":10000000}}
+T{"method":"Debugger.setPauseOnExceptions","params":{"state":"none"}}
+T{"method":"Debugger.setAsyncCallStackDepth","params":{"maxDepth":32}}
+T{"method":"DOM.enable","params":{}}
+T{"method":"CSS.enable","params":{}}
+T{"method":"Overlay.enable","params":{}}
+T{"method":"Overlay.setShowViewportSizeOnResize","params":{"show":true}}
+T{"method":"Log.enable","params":{}}
+T{"method":"Log.startViolationsReport","params":{"config":[{"name":"longTask","threshold":200}]}}
+T{"method":"Emulation.setEmulatedMedia","params":{"media":"","features":[]}}
+T{"method":"Emulation.setFocusEmulationEnabled","params":{"enabled":false}}
+T{"method":"Page.setAdBlockingEnabled","params":{"enabled":false}}

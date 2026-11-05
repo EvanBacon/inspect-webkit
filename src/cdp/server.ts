@@ -9,27 +9,35 @@
 // WebSocket endpoint (one per debugging session):
 //   ws://host:port/devtools/page/<targetId>
 //
-// targetId is "device:<udid>:<appId>:<pageId>" or "sim:<pid>:<appId>:<pageId>".
+// targetId is "device:<udid>:<appId>:<pageId>" or "sim:<udid>:<appId>:<pageId>".
 //
 // Architecture:
-//   For each connected source (USB device or simulator) we keep a single
-//   WebInspectorClient ("backend") open for the server's lifetime. We
-//   periodically refresh its target listing. When a DevTools client opens
-//   a WS, we allocate a fresh WIRSenderKey, send forwardSocketSetup, and
-//   route _rpc_applicationSentData: frames whose WIRDestinationKey matches
-//   to that session's Target.
+//   Sources (USB/Wi-Fi devices, simulators) come from the shared
+//   SourceManager (core/source-manager.ts), which discovers them, keeps one
+//   WebInspectorClient ("backend") per source open for the server's
+//   lifetime and reconnects with backoff. The server listens immediately
+//   and adds each source as it becomes ready. We periodically refresh each
+//   source's target listing. Each inspected page gets one PageChannel (one
+//   WIRSenderKey / forwardSocketSetup), shared by every client on that page
+//   — DevTools WebSockets, browser-endpoint sessions, hover highlights —
+//   each with its own Target session (see page-channel.ts).
 
 import { WebSocketServer, type WebSocket as WSWebSocket } from "ws";
 import type { AddressInfo } from "node:net";
-import * as usbmux from "../usbmux";
-import { LockdownClient } from "../lockdown";
-import { WebInspectorClient, type WIMessage } from "../webinspector";
-import * as sim from "../sim";
+import {
+  type Source,
+  type SourceInfo,
+  type SourceManager,
+  acquireSharedSourceManager,
+} from "../core/source-manager";
 import { Target as CdpTarget } from "./target";
 import { installIOSFilters } from "./ios-protocol";
+import { PageChannel } from "./page-channel";
 import {
+  type CdpHttpServer,
   type CdpServerBaseOptions,
-  WS_MAX_PAYLOAD,
+  WS_SERVER_LIMITS,
+  checkResponseBodyRefetch,
   buildJsonTarget,
   createCdpHttpServer,
   logCdpServerBanner,
@@ -37,14 +45,10 @@ import {
   safeDecode,
 } from "./http";
 import { attachBrowserWs, type PageSessionHandle } from "./browser-endpoint";
+import { isPlistDict, parseApp, parseListing, type WIApplication, type WIListedPage } from "../webinspector";
+import { capture } from "../capture";
 
-export type Source = {
-  kind: "device" | "simulator";
-  id: string; // udid for device, "sim:<pid>" for simulator
-  label: string;
-  wi: WebInspectorClient;
-  lockdown?: LockdownClient;
-};
+export type { Source } from "../core/source-manager";
 
 type CdpTargetEntry = {
   targetId: string;
@@ -75,18 +79,17 @@ const PAGE_GONE_GRACE_MS = 1000;
 const CLOSE_INTERNAL = 1011;
 const CLOSE_GOING_AWAY = 1001;
 
-/** One bridge-owned WIR sender attached to a page. */
-type ActiveSession = {
-  kind: "page" | "browser" | "highlight";
+/** The shared WIR sender for one inspected page, and its listing misses. */
+type PageRecord = {
+  channel: PageChannel;
   source: Source;
   appId: string;
   pageId: number;
   targetId: string;
-  senderKey: string;
   misses: number;
   firstMissAt: number;
-  /** Server-initiated teardown: release the WIR sender and tell the client. */
-  terminate(reason: string, code?: number): void;
+  /** Warned that another inspector holds this page (reset once it's free). */
+  warnedForeignHolder: boolean;
 };
 
 export type CdpServerOptions = CdpServerBaseOptions & {
@@ -95,8 +98,17 @@ export type CdpServerOptions = CdpServerBaseOptions & {
    * discovering USB devices and simulators.
    */
   openSources?: () => Promise<Source[]>;
+  /**
+   * @internal Use this SourceManager instead of the process-wide shared one
+   * (tests). The caller owns its lifetime.
+   */
+  sourceManager?: SourceManager;
   /** @internal Test seam: override PAGE_GONE_GRACE_MS. */
   pageGoneGraceMs?: number;
+  /** @internal Fuzzing seam: don't bind any socket (drive it via onHttpServer). */
+  listen?: boolean;
+  /** @internal Fuzzing seam: receives the HTTP front door for in-process dispatch. */
+  onHttpServer?: (server: CdpHttpServer) => void;
 };
 
 export type CdpServer = {
@@ -112,76 +124,110 @@ export type CdpServer = {
   /**
    * Drop the cached hover-highlight session for a target (or all of them
    * when `targetId` is omitted). Hosts should call this when their picker
-   * closes so we don't keep a WIR connection alive that would block other
-   * debuggers from attaching.
+   * closes so we don't hold the page's inspector connection (and the
+   * "in use" mark Safari's Develop menu shows) longer than needed.
    */
   releaseHighlight(targetId?: string): void;
   /** Addresses the HTTP/WS server is listening on. */
   addresses(): AddressInfo[];
+  /** Known inspector sources and their connection state. */
+  getSources(): SourceInfo[];
 };
+
+/** How long to wait for sources before warning that none were found. */
+const NO_SOURCES_WARN_MS = 15_000;
 
 export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpServer> {
   const port = opts.port ?? 9222;
   const host = opts.host ?? "localhost";
   const pageGoneGraceMs = opts.pageGoneGraceMs ?? PAGE_GONE_GRACE_MS;
+  // Per-session filter options. bridgePorts is read lazily: the server
+  // isn't listening yet.
+  const filterOpts = {
+    network: {
+      responseBodyRefetch: checkResponseBodyRefetch(opts.responseBodyRefetch),
+      bridgePorts: () => httpServer.addresses().map((a) => a.port),
+    },
+  };
 
-  const sources: Source[] = await (opts.openSources ?? openAllSources)();
-  if (sources.length === 0) {
-    console.error("warn: no inspectable sources found (no devices, no simulators).");
-    console.error("      The server will still run; new targets will appear if you start one.");
-  }
+  // Ready sources. A reconnect produces a new Source object (same id).
+  const sources = new Set<Source>();
 
   // listing cache: continuously refreshed from each source's WI client.
-  const listingsByApp = new Map<string, Map<string, any>>();
+  const listingsByApp = new Map<string, Map<string, WIListedPage>>();
   // Track sources that have requested per-app listing notifications already.
   const subscribedAppsBySource = new WeakMap<Source, Set<string>>();
-  let appsBySource = new Map<Source, any[]>();
+  let appsBySource = new Map<Source, ServerApp[]>();
 
-  // Every bridge-owned WIR sender (DevTools WS, browser-endpoint session,
-  // hover-highlight session), so source/app/page loss can tear them down.
-  const activeSessions = new Set<ActiveSession>();
+  // One PageChannel per attached page (targetId → record), so source/app/
+  // page loss can tear down every client on it.
+  const pages = new Map<string, PageRecord>();
 
   function terminateSessions(
-    pred: (s: ActiveSession) => boolean,
+    pred: (p: PageRecord) => boolean,
     reason: string,
     code = CLOSE_INTERNAL,
   ): void {
-    for (const s of [...activeSessions]) {
-      if (!pred(s)) continue;
-      try {
-        s.terminate(reason, code);
-      } catch (e) {
-        console.error(`warn: session teardown failed: ${(e as Error)?.message ?? e}`);
+    for (const p of [...pages.values()]) {
+      if (!pred(p)) continue;
+      if (p.channel.clientCount > 0) {
+        console.error(`# devtools sessions closed (${reason}): ${p.targetId}`);
       }
+      p.channel.close(reason, code);
     }
   }
 
-  for (const src of sources) {
+  /** The page's channel, created (not yet set up) if nobody is attached. */
+  function channelFor(entry: CdpTargetEntry): PageChannel {
+    const cur = pages.get(entry.targetId);
+    if (cur && cur.source === entry.source && !cur.channel.closed) return cur.channel;
+    const channel = new PageChannel(entry.source.wi, entry.appId, entry.pageId, {
+      onEmpty: () => {
+        if (pages.get(entry.targetId)?.channel === channel) pages.delete(entry.targetId);
+      },
+    });
+    pages.set(entry.targetId, {
+      channel,
+      source: entry.source,
+      appId: entry.appId,
+      pageId: entry.pageId,
+      targetId: entry.targetId,
+      misses: 0,
+      firstMissAt: 0,
+      warnedForeignHolder: false,
+    });
+    return channel;
+  }
+
+  /** Per-source listener removers, so stop() detaches from sources that
+   *  outlive this server (shared manager). */
+  const sourceListeners = new Map<Source, () => void>();
+
+  function addSource(src: Source): void {
+    if (sources.has(src) || src.wi.closed) return;
+    sources.add(src);
     appsBySource.set(src, []);
     subscribedAppsBySource.set(src, new Set());
 
-    src.wi.onClose(() => {
-      console.error(`# source disconnected: ${src.label}`);
-      appsBySource.set(src, []);
+    const offClose = src.wi.onClose(() => {
+      offSub();
+      sourceListeners.delete(src);
+      sources.delete(src);
+      appsBySource.delete(src);
       for (const k of [...listingsByApp.keys()]) {
         if (k.startsWith(`${src.id}:`)) listingsByApp.delete(k);
       }
       terminateSessions((s) => s.source === src, `inspector source ${src.label} disconnected`);
     });
 
-    src.wi.subscribe((m) => {
+    const offSub = src.wi.subscribe((m) => {
       const sel = m.__selector as string | undefined;
       const arg = m.__argument as Record<string, any> | undefined;
       if (!sel || !arg) return;
 
       if (sel === "_rpc_reportConnectedApplicationList:") {
-        const dict = (arg.WIRApplicationDictionaryKey as Record<string, any>) ?? {};
-        const apps = Object.entries(dict).map(([appId, a]) => ({
-          appId,
-          bundleId: a.WIRApplicationBundleIdentifierKey,
-          name: a.WIRApplicationNameKey ?? a.WIRApplicationBundleIdentifierKey ?? appId,
-          isProxy: Boolean(a.WIRIsApplicationProxyKey),
-        }));
+        const dict = isPlistDict(arg.WIRApplicationDictionaryKey) ? arg.WIRApplicationDictionaryKey : {};
+        const apps = Object.entries(dict).map(([appId, raw]) => serverApp(parseApp(appId, raw)));
         const prev = appsBySource.get(src) ?? [];
         appsBySource.set(src, apps);
         const subs = subscribedAppsBySource.get(src)!;
@@ -201,79 +247,116 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
           src.wi.send("_rpc_forwardGetListing:", { WIRApplicationIdentifierKey: a.appId });
         }
       } else if (sel === "_rpc_applicationConnected:") {
-        const a = arg;
+        const appId = arg.WIRApplicationIdentifierKey;
+        if (typeof appId !== "string") return;
+        const a = serverApp(parseApp(appId, arg));
         const apps = appsBySource.get(src) ?? [];
-        if (!apps.find((x) => x.appId === a.WIRApplicationIdentifierKey)) {
-          apps.push({
-            appId: a.WIRApplicationIdentifierKey,
-            bundleId: a.WIRApplicationBundleIdentifierKey,
-            name: a.WIRApplicationNameKey ?? a.WIRApplicationBundleIdentifierKey,
-            isProxy: Boolean(a.WIRIsApplicationProxyKey),
-          });
+        if (!apps.find((x) => x.appId === appId)) {
+          apps.push(a);
           appsBySource.set(src, apps);
         }
-        if (!a.WIRIsApplicationProxyKey) {
+        if (!a.isProxy) {
           const subs = subscribedAppsBySource.get(src)!;
-          if (!subs.has(a.WIRApplicationIdentifierKey)) {
-            subs.add(a.WIRApplicationIdentifierKey);
-            src.wi.send("_rpc_forwardGetListing:", {
-              WIRApplicationIdentifierKey: a.WIRApplicationIdentifierKey,
-            });
+          if (!subs.has(appId)) {
+            subs.add(appId);
+            src.wi.send("_rpc_forwardGetListing:", { WIRApplicationIdentifierKey: appId });
           }
         }
       } else if (sel === "_rpc_applicationDisconnected:") {
+        const appId = arg.WIRApplicationIdentifierKey;
+        if (typeof appId !== "string") return;
         const apps = appsBySource.get(src) ?? [];
         appsBySource.set(
           src,
-          apps.filter((x) => x.appId !== arg.WIRApplicationIdentifierKey),
+          apps.filter((x) => x.appId !== appId),
         );
-        listingsByApp.delete(`${src.id}:${arg.WIRApplicationIdentifierKey}`);
-        subscribedAppsBySource.get(src)?.delete(arg.WIRApplicationIdentifierKey);
+        listingsByApp.delete(`${src.id}:${appId}`);
+        subscribedAppsBySource.get(src)?.delete(appId);
         terminateSessions(
-          (s) => s.source === src && s.appId === arg.WIRApplicationIdentifierKey,
+          (s) => s.source === src && s.appId === appId,
           "application disconnected",
         );
       } else if (sel === "_rpc_applicationSentListing:") {
-        const appId = arg.WIRApplicationIdentifierKey as string;
-        const listing = (arg.WIRListingKey as Record<string, any>) ?? {};
-        const map = new Map<string, any>();
-        for (const [k, p] of Object.entries(listing)) {
-          map.set(k, {
-            pageId: Number(p.WIRPageIdentifierKey ?? 0),
-            title: p.WIRTitleKey ?? "",
-            url: p.WIRURLKey ?? "",
-            type: p.WIRTypeKey ?? "",
-            // WIR sets WIRConnectionIdentifierKey on a page once any inspector
-            // (Safari Develop menu, chrome://inspect, our own bridge, ...)
-            // attaches. Empty/missing → no debugger attached.
-            connectionId: typeof p.WIRConnectionIdentifierKey === "string"
-              ? p.WIRConnectionIdentifierKey
-              : null,
-          });
-        }
+        const appId = arg.WIRApplicationIdentifierKey;
+        if (typeof appId !== "string") return;
+        const map = new Map<string, WIListedPage>();
+        for (const p of parseListing(arg.WIRListingKey)) map.set(String(p.pageId), p);
         listingsByApp.set(`${src.id}:${appId}`, map);
         notePageListing(src, appId, map);
       }
     });
 
+    sourceListeners.set(src, () => {
+      offSub();
+      offClose();
+    });
     src.wi.send("_rpc_reportIdentifier:", {});
     src.wi.send("_rpc_getConnectedApplications:", {});
   }
 
+  let manager: SourceManager | null = null;
+  let releaseManager = () => {};
+  let offSourceReady = () => {};
+  if (opts.openSources) {
+    for (const src of await opts.openSources()) addSource(src);
+  } else {
+    if (opts.sourceManager) {
+      manager = opts.sourceManager;
+    } else {
+      const lease = acquireSharedSourceManager();
+      manager = lease.manager;
+      releaseManager = () => lease.release();
+    }
+    offSourceReady = manager.onSourceReady(addSource);
+    for (const src of manager.readySources()) addSource(src);
+    manager.start();
+    // Never block listen() on discovery; just tell the user if nothing shows up.
+    const m = manager;
+    void m.settled(NO_SOURCES_WARN_MS).then(() => {
+      if (m.isStopped || m.list().length > 0) return;
+      console.error("warn: no inspectable sources found yet (no devices, no booted simulators).");
+      console.error("      The server keeps running; new targets will appear when you start one.");
+    });
+  }
+
+  function heldByOther(src: Source, page: WIListedPage): boolean {
+    return !!page.connectionId && page.connectionId !== src.wi.connection;
+  }
+
+  /**
+   * WebKit keeps the first inspector on a page and silently ignores later
+   * ones, so while Safari's Web Inspector (or another bridge) holds a page our
+   * clients get no replies at all. Say so, once per takeover.
+   */
+  function noteHolder(p: PageRecord, foreign: boolean): void {
+    if (!foreign) {
+      p.warnedForeignHolder = false;
+      return;
+    }
+    if (p.warnedForeignHolder || p.channel.clientCount === 0) return;
+    p.warnedForeignHolder = true;
+    console.error(
+      `warn: ${p.targetId} is held by another inspector (Safari's Web Inspector, or another ` +
+        "inspect-webkit / CDP bridge). WebKit won't answer clients here until it detaches.",
+    );
+  }
+
   /** Close sessions whose page has dropped out of its app's listing. */
-  function notePageListing(src: Source, appId: string, listing: Map<string, any>) {
-    const present = new Set<number>();
-    for (const p of listing.values()) present.add(p.pageId);
+  function notePageListing(src: Source, appId: string, listing: Map<string, WIListedPage>) {
+    const listed = new Map<number, WIListedPage>();
+    for (const p of listing.values()) listed.set(p.pageId, p);
     const now = Date.now();
-    for (const s of [...activeSessions]) {
-      if (s.source !== src || s.appId !== appId) continue;
-      if (present.has(s.pageId)) {
-        s.misses = 0;
+    for (const p of [...pages.values()]) {
+      if (p.source !== src || p.appId !== appId) continue;
+      const page = listed.get(p.pageId);
+      if (page) {
+        p.misses = 0;
+        noteHolder(p, heldByOther(src, page));
         continue;
       }
-      if (s.misses++ === 0) s.firstMissAt = now;
-      if (s.misses >= PAGE_GONE_MISSES && now - s.firstMissAt >= pageGoneGraceMs) {
-        s.terminate("inspected page is gone");
+      if (p.misses++ === 0) p.firstMissAt = now;
+      if (p.misses >= PAGE_GONE_MISSES && now - p.firstMissAt >= pageGoneGraceMs) {
+        terminateSessions((x) => x === p, "inspected page is gone");
       }
     }
   }
@@ -288,8 +371,6 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       }
     }
   }, REFRESH_MS);
-
-  const sessions = new Map<string, CdpTarget>(); // senderKey -> session
 
   function listTargets(): CdpTargetEntry[] {
     const out: CdpTargetEntry[] = [];
@@ -306,8 +387,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
           // own connection id. A match means it's our own attachment (the
           // iframe inspector or a hover-highlight session); anything else is
           // a foreign debugger (Safari Develop menu, chrome://inspect, …).
-          const otherInspector =
-            !!p.connectionId && p.connectionId !== src.wi.connection;
+          const otherInspector = heldByOther(src, p);
           out.push({
             targetId: `${src.id}:${a.appId}:${p.pageId}`,
             source: src,
@@ -345,6 +425,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       listTargets().map((t) =>
         buildJsonTarget({
           reqHost,
+          listening: httpServer.addresses(),
           id: t.targetId,
           description: `${t.source.label}${t.bundleId ? ` (${t.bundleId})` : ""}`,
           title: t.title || t.appName,
@@ -358,7 +439,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       ),
   }, { host, allowOrigins: opts.allowOrigins });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
+  const wss = new WebSocketServer({ noServer: true, ...WS_SERVER_LIMITS });
   wss.on("error", (e) => console.error(`# ws server error: ${(e as Error)?.message ?? e}`));
   const browserPath = `/devtools/browser/${browserId}`;
 
@@ -375,11 +456,10 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
               title: t.title || t.appName,
               url: t.url,
             })),
-          createPageSession: (targetId, send, onServerClose, o) => {
+          createPageSession: (targetId, send, onServerClose) => {
             const entry = listTargets().find((t) => t.targetId === targetId);
             if (!entry) return null;
-            if (o?.auto && pageHasClientSession(entry)) return null;
-            return createPageSession(entry, "browser", send, onServerClose);
+            return createPageSession(entry, send, onServerClose);
           },
         });
       });
@@ -407,19 +487,6 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     });
   });
 
-  function pageHasClientSession(entry: CdpTargetEntry): boolean {
-    for (const s of activeSessions) {
-      if (
-        s.kind !== "highlight" &&
-        s.source === entry.source &&
-        s.appId === entry.appId &&
-        s.pageId === entry.pageId
-      )
-        return true;
-    }
-    return false;
-  }
-
   /** A protocol error on one client (bad frame, oversized message, reset)
    *  must only drop that client. */
   function guardWs(ws: WSWebSocket) {
@@ -433,72 +500,28 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
 
   function createPageSession(
     entry: CdpTargetEntry,
-    kind: "page" | "browser",
     sendToTools: (text: string) => void,
     onServerClose: (reason: string, code: number) => void,
   ): PageSessionHandle {
-    // WIR allows one sender per page. A second attach used to silently
-    // steal the page and leave the first client hanging forever (R7);
-    // until we multiplex, the newest session wins and the older one is
-    // told why.
-    terminateSessions(
-      (s) => s.source === entry.source && s.appId === entry.appId && s.pageId === entry.pageId,
-      "replaced by a newer DevTools session",
-    );
-
-    const senderKey = crypto.randomUUID();
     // Virtual ws — CdpTarget only uses readyState + send().
     const fakeWs = {
       readyState: 1,
       send: (text: string) => sendToTools(text),
     } as unknown as WSWebSocket;
-    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, senderKey);
-    installIOSFilters(cdp);
-    sessions.set(senderKey, cdp);
-
-    const debug = !!process.env.INSPECT_WEBKIT_DEBUG;
-    const unsub = subscribeSessionData(entry, senderKey, (text) => {
-      if (debug) console.error(`[cdp] target>> ${text.slice(0, 240)}`);
-      return cdp.onMessageFromTarget(text);
-    });
-
-    let closed = false;
-    const teardown = (reason: string) => {
-      if (closed) return false;
-      closed = true;
-      unsub();
-      activeSessions.delete(record);
-      cdp.close(reason);
+    const channel = channelFor(entry);
+    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, channel.senderKey);
+    installIOSFilters(cdp, filterOpts);
+    const detach = channel.attach(cdp, (reason, code) => {
       try {
-        cdp.wi.forwardDidClose(cdp.appId, cdp.pageId, cdp.senderKey);
+        onServerClose(reason, code);
       } catch {}
-      sessions.delete(cdp.senderKey);
-      return true;
-    };
-    const record: ActiveSession = {
-      kind,
-      source: entry.source,
-      appId: entry.appId,
-      pageId: entry.pageId,
-      targetId: entry.targetId,
-      senderKey,
-      misses: 0,
-      firstMissAt: 0,
-      terminate(reason, code = CLOSE_INTERNAL) {
-        if (!teardown(reason)) return;
-        console.error(`# devtools session closed (${reason}): ${entry.targetId}`);
-        try {
-          onServerClose(reason, code);
-        } catch {}
-      },
-    };
-    activeSessions.add(record);
-
-    entry.source.wi.forwardSocketSetup(entry.appId, entry.pageId, senderKey);
+    });
     console.error(
-      `# devtools attached: ${entry.source.label} :: ${entry.appName} :: ${entry.title || entry.url}`,
+      `# devtools attached (${channel.clientCount} on page): ${entry.source.label} :: ${entry.appName} :: ${entry.title || entry.url}`,
     );
-
+    const record = pages.get(entry.targetId);
+    if (record) noteHolder(record, entry.inUseByOtherInspector);
+    const debug = !!process.env.INSPECT_WEBKIT_DEBUG;
     return {
       onMessageFromTools(text: string) {
         if (debug) console.error(`[cdp] tools>>  ${text.slice(0, 300)}`);
@@ -507,111 +530,75 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
         );
       },
       close() {
-        teardown("DevTools client disconnected");
+        cdp.close("DevTools client disconnected");
+        detach();
       },
     };
   }
 
-  /** Route _rpc_applicationSentData: frames for one sender to `deliver`. */
-  function subscribeSessionData(
-    entry: CdpTargetEntry,
-    senderKey: string,
-    deliver: (text: string) => Promise<void>,
-  ): () => void {
-    return entry.source.wi.subscribe((m: WIMessage) => {
-      if (m.__selector !== "_rpc_applicationSentData:") return;
-      const arg = m.__argument as Record<string, any> | undefined;
-      if (!arg || typeof arg !== "object") return;
-      if (arg.WIRDestinationKey && arg.WIRDestinationKey !== senderKey) return;
-      if (arg.WIRApplicationIdentifierKey !== entry.appId) return;
-      if (
-        arg.WIRPageIdentifierKey !== undefined &&
-        Number(arg.WIRPageIdentifierKey) !== entry.pageId
-      )
-        return;
-      const data = arg.WIRMessageDataKey ?? arg.WIRSocketDataKey;
-      if (!data) return;
-      let text: string;
-      if (typeof data === "string") text = data;
-      else if (data instanceof Uint8Array) text = new TextDecoder().decode(data);
-      else return;
-      deliver(text).catch((e) =>
-        console.error(`# cdp: target message failed: ${(e as Error)?.message ?? e}`),
-      );
-    });
-  }
-
   // Hover-highlight sessions. Each target keeps its own short-lived CDP
-  // session so the host UI can flash an inspectable target the way Safari
-  // does when you hover an entry under Develop → device menu. We cache the
-  // session per target (DOM.getDocument is non-trivial), and idle-close it
-  // after 30s of no highlight activity.
+  // session (a client on the page's shared channel) so the host UI can
+  // flash an inspectable target the way Safari does when you hover an
+  // entry under Develop → device menu. The session is cached per target and
+  // idle-closed after a few seconds without highlight activity.
+  //
+  // It highlights by object id (Runtime.evaluate → DOM.highlightNode
+  // {objectId}) rather than DOM.getDocument + nodeId: WebKit's getDocument
+  // resets every DOM node id, which would break a DevTools Elements panel
+  // sharing the page.
   type HighlightSession = {
     cdp: CdpTarget;
     close: () => void;
-    rootNodeIdPromise: Promise<number>;
+    objectIdPromise: Promise<string>;
     idleTimer: ReturnType<typeof setTimeout> | null;
   };
   const highlightSessions = new Map<string, HighlightSession>();
   const HIGHLIGHT_IDLE_MS = 8_000;
+  const HIGHLIGHT_GROUP = "inspect-webkit-highlight";
 
   function getOrOpenHighlightSession(targetId: string): HighlightSession | null {
     const existing = highlightSessions.get(targetId);
     if (existing) return existing;
     const entry = listTargets().find((t) => t.targetId === targetId);
     if (!entry) return null;
-    // Never steal the page from a real DevTools session just to flash it.
-    if (pageHasClientSession(entry)) return null;
-    const senderKey = crypto.randomUUID();
+    const channel = channelFor(entry);
     const fakeWs = { readyState: 1, send: () => {} } as unknown as WSWebSocket;
-    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, senderKey);
-    installIOSFilters(cdp);
-    sessions.set(senderKey, cdp);
-    const unsub = subscribeSessionData(entry, senderKey, (text) => cdp.onMessageFromTarget(text));
-    entry.source.wi.forwardSocketSetup(entry.appId, entry.pageId, senderKey);
-    // DOM.getDocument can stall if Safari hasn't dispatched Target.targetCreated
-    // yet — wrap in 5s so callers don't hang. We close the session below in
-    // the .catch on the cached promise.
-    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-    const rootNodeIdPromise: Promise<number> = Promise.race([
-      cdp.callTarget("DOM.getDocument", { depth: 0 }).then((r: any) => r?.root?.nodeId as number),
-      new Promise<number>((_, reject) => {
-        timeoutTimer = setTimeout(() => reject(new Error("DOM.getDocument timeout")), 5_000);
-      }),
-    ]).finally(() => clearTimeout(timeoutTimer));
+    const cdp = new CdpTarget(fakeWs, entry.source.wi, entry.appId, entry.pageId, channel.senderKey);
     let closed = false;
     const session: HighlightSession = {
       cdp,
-      rootNodeIdPromise,
+      objectIdPromise: Promise.resolve(""),
       idleTimer: null,
       close() {
         if (closed) return;
         closed = true;
         if (session.idleTimer) clearTimeout(session.idleTimer);
-        unsub();
-        activeSessions.delete(record);
-        cdp.close("highlight session closed");
-        try {
-          cdp.wi.forwardDidClose(cdp.appId, cdp.pageId, cdp.senderKey);
-        } catch {}
-        sessions.delete(senderKey);
         if (highlightSessions.get(targetId) === session) highlightSessions.delete(targetId);
+        // Others may stay on the page: don't leave our remote objects behind.
+        if (channel.clientCount > 1) {
+          cdp.callTarget("Runtime.releaseObjectGroup", { objectGroup: HIGHLIGHT_GROUP }).catch(() => {});
+        }
+        cdp.close("highlight session closed");
+        detach();
       },
     };
-    const record: ActiveSession = {
-      kind: "highlight",
-      source: entry.source,
-      appId: entry.appId,
-      pageId: entry.pageId,
-      targetId,
-      senderKey,
-      misses: 0,
-      firstMissAt: 0,
-      terminate: () => session.close(),
-    };
-    activeSessions.add(record);
+    const detach = channel.attach(cdp, () => session.close());
+    // Evaluation can stall if Safari hasn't dispatched Target.targetCreated
+    // yet — the 5 s deadline keeps callers from hanging; the session is
+    // closed below in the .catch on the cached promise.
+    session.objectIdPromise = cdp
+      .callTarget(
+        "Runtime.evaluate",
+        { expression: "document.documentElement", objectGroup: HIGHLIGHT_GROUP },
+        5_000,
+      )
+      .then((r: any) => {
+        const id = r?.result?.objectId;
+        if (typeof id !== "string") throw new Error("no document element");
+        return id;
+      });
     highlightSessions.set(targetId, session);
-    rootNodeIdPromise.catch(() => session.close());
+    session.objectIdPromise.catch(() => session.close());
     return session;
   }
 
@@ -634,10 +621,9 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     bumpHighlightIdle(session);
     try {
       if (on) {
-        const nodeId = await session.rootNodeIdPromise;
-        if (!nodeId) return;
+        const objectId = await session.objectIdPromise;
         await session.cdp.callTarget("DOM.highlightNode", {
-          nodeId,
+          objectId,
           highlightConfig: {
             showInfo: false,
             contentColor: { r: 111, g: 168, b: 220, a: 0.55 },
@@ -666,10 +652,11 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       closeWs(ws, CLOSE_INTERNAL, `unknown target ${targetId}`);
       return;
     }
+    const capSession = capture.on ? capture.session(`page:${targetId}`) : "";
     const sess = createPageSession(
       entry,
-      "page",
       (text) => {
+        if (capture.on) capture.cdp("out", capSession, text);
         if (ws.readyState === 1) ws.send(text);
       },
       (reason, code) => closeWs(ws, code, reason),
@@ -691,6 +678,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     ws.on("message", (raw, isBinary) => {
       try {
         const text = isBinary ? new TextDecoder().decode(raw as Buffer) : raw.toString();
+        if (capture.on) capture.cdp("in", capSession, text);
         sess.onMessageFromTools(text);
       } catch (e) {
         console.error(`# ws message error: ${(e as Error)?.message ?? e}`);
@@ -702,19 +690,33 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     });
   }
 
-  try {
-    await httpServer.listen(host, port);
-  } catch (e) {
-    clearInterval(refreshTimer);
-    for (const src of sources) {
+  function releaseSources() {
+    offSourceReady();
+    for (const off of sourceListeners.values()) off();
+    sourceListeners.clear();
+    if (manager) {
+      releaseManager();
+      return;
+    }
+    for (const src of [...sources]) {
       try {
         src.wi.close();
         src.lockdown?.close();
       } catch {}
     }
-    throw e;
   }
-  logCdpServerBanner({ brand: "safari", host, port: httpServer.addresses()[0]?.port ?? port });
+
+  opts.onHttpServer?.(httpServer);
+  if (opts.listen !== false) {
+    try {
+      await httpServer.listen(host, port);
+    } catch (e) {
+      clearInterval(refreshTimer);
+      releaseSources();
+      throw e;
+    }
+    logCdpServerBanner({ brand: "safari", host, port: httpServer.addresses()[0]?.port ?? port });
+  }
 
   return {
     stop() {
@@ -728,12 +730,7 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
       }
       wss.close();
       httpServer.close();
-      for (const src of sources) {
-        try {
-          src.wi.close();
-          src.lockdown?.close();
-        } catch {}
-      }
+      releaseSources();
     },
     /** Snapshot of current debuggable targets. */
     getTargets(): CdpTargetEntry[] {
@@ -754,75 +751,18 @@ export async function startCdpServer(opts: CdpServerOptions = {}): Promise<CdpSe
     addresses(): AddressInfo[] {
       return httpServer.addresses();
     },
+    getSources(): SourceInfo[] {
+      if (manager) return manager.list();
+      return [...sources].map((s) => ({
+        id: s.id,
+        kind: s.kind,
+        label: s.label,
+        udid: s.udid ?? s.id,
+        state: s.wi.closed ? ("closed" as const) : ("ready" as const),
+        attempts: 0,
+      }));
+    },
   };
-}
-
-async function openAllSources(): Promise<Source[]> {
-  const [devices, simulators] = await Promise.all([openDeviceSources(), openSimulatorSources()]);
-  return [...devices, ...simulators];
-}
-
-async function openDeviceSources(): Promise<Source[]> {
-  let devices: usbmux.Device[] = [];
-  try {
-    devices = await usbmux.listDevices();
-  } catch (e) {
-    console.error(`warn: usbmux: ${(e as Error).message}`);
-    return [];
-  }
-  const sources = await Promise.all(devices.map(openDeviceSource));
-  return sources.filter((s): s is Source => s !== null);
-}
-
-async function openDeviceSource(d: usbmux.Device): Promise<Source | null> {
-  try {
-    const pair = await usbmux.readPairRecord(d.Properties.SerialNumber);
-    const lockdown = await LockdownClient.open(d, pair);
-    await lockdown.startSession();
-    const svc = await lockdown.startService("com.apple.webinspector");
-    const { socket, stream } = await lockdown.connectService(svc);
-    const wi = new WebInspectorClient(socket, stream);
-    await wi.reportIdentifier();
-    return {
-      kind: "device",
-      id: `device:${d.Properties.SerialNumber}`,
-      label: `device:${d.Properties.SerialNumber.slice(0, 8)}`,
-      wi,
-      lockdown,
-    };
-  } catch (e) {
-    console.error(`warn: device ${d.Properties.SerialNumber}: ${(e as Error).message}`);
-    return null;
-  }
-}
-
-async function openSimulatorSources(): Promise<Source[]> {
-  let runtimes: sim.SimRuntime[] = [];
-  try {
-    runtimes = await sim.findSimulatorSockets();
-  } catch (e) {
-    console.error(`warn: simulator discovery: ${(e as Error).message}`);
-    return [];
-  }
-  const sources = await Promise.all(runtimes.map(openSimulatorSource));
-  return sources.filter((s): s is Source => s !== null);
-}
-
-async function openSimulatorSource(r: sim.SimRuntime): Promise<Source | null> {
-  try {
-    const { socket, stream } = await sim.connectSimulator(r.socketPath);
-    const wi = new WebInspectorClient(socket, stream);
-    await wi.reportIdentifier();
-    return {
-      kind: "simulator",
-      id: `sim:${r.pid}`,
-      label: `sim:${r.pid}`,
-      wi,
-    };
-  } catch (e) {
-    console.error(`warn: simulator ${r.socketPath}: ${(e as Error).message}`);
-    return null;
-  }
 }
 
 // chrome://inspect filters on type==="page" — map page-like Safari categories
@@ -840,6 +780,12 @@ function closeWs(ws: WSWebSocket, code: number, reason: string): void {
   try {
     ws.terminate();
   } catch {}
+}
+
+type ServerApp = { appId: string; bundleId?: string; name: string; isProxy: boolean };
+
+function serverApp(a: WIApplication): ServerApp {
+  return { appId: a.appId, bundleId: a.bundleId, name: a.name ?? a.bundleId ?? a.appId, isProxy: a.isProxy };
 }
 
 function mapWIRType(t: string): string {

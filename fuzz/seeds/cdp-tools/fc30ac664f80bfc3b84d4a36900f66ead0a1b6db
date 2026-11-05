@@ -1,0 +1,4 @@
+AT{"method":"Runtime.enable","params":{}}
+T{"method":"Debugger.enable","params":{}}
+T{"method":"Runtime.evaluate","params":{"expression":"console.log('from B')"}}
+T{"method":"Runtime.disable","params":{}}

@@ -36,6 +36,11 @@ const HOST_HELP =
 const ORIGIN_HELP =
   "extra WebSocket Origin to accept besides devtools://devtools and none; repeatable or comma-separated (\"*\" = any)";
 
+const REFETCH_HELP =
+  "Network.getResponseBody fallback when WebKit has no body: public = re-fetch from public internet hosts only, any = also localhost/LAN (never this bridge), off = never re-fetch";
+const refetchOption = () =>
+  new Option("--response-body-refetch <mode>", REFETCH_HELP).choices(["public", "any", "off"]).default("public");
+
 const program = new Command();
 
 program
@@ -46,6 +51,7 @@ program
   .addOption(new Option("-p, --port <port>", "listen port").default(9222).argParser(parsePort))
   .addOption(new Option("-H, --host <host>", HOST_HELP).default("localhost"))
   .addOption(new Option("--allow-origin <origin>", ORIGIN_HELP).argParser(collectOrigins))
+  .addOption(refetchOption())
   .addHelpText(
     "after",
     `
@@ -61,11 +67,12 @@ requirements:
 `,
   )
   .showHelpAfterError()
-  .action(async (opts: { port: number; host: string; allowOrigin?: string[] }) => {
+  .action(async (opts: { port: number; host: string; allowOrigin?: string[]; responseBodyRefetch: "public" | "any" | "off" }) => {
     const server = await startCdpServer({
       port: opts.port,
       host: opts.host,
       allowOrigins: opts.allowOrigin,
+      responseBodyRefetch: opts.responseBodyRefetch,
     });
     process.on("SIGINT", () => {
       server.stop();
@@ -85,13 +92,15 @@ program
   .addOption(new Option("-p, --port <port>", "listen port").default(9223).argParser(parsePort))
   .addOption(new Option("-H, --host <host>", HOST_HELP).default("localhost"))
   .addOption(new Option("--allow-origin <origin>", ORIGIN_HELP).argParser(collectOrigins))
-  .action(async (urls: string[], opts: { port: number; host: string; allowOrigin?: string[] }) => {
+  .addOption(refetchOption())
+  .action(async (urls: string[], opts: { port: number; host: string; allowOrigin?: string[]; responseBodyRefetch: "public" | "any" | "off" }) => {
     const upstreams = urls.map((url) => ({ url }));
     const server = await startBunCdpServer({
       upstreams,
       port: opts.port,
       host: opts.host,
       allowOrigins: opts.allowOrigin,
+      responseBodyRefetch: opts.responseBodyRefetch,
     });
     process.on("SIGINT", () => {
       server.stop();

@@ -99,7 +99,7 @@ export function seedApp(
 export function sendListing(
   rig: ReturnType<typeof makeFakeWir>,
   appId: string,
-  pages: Array<{ id: number; url?: string; title?: string }>,
+  pages: Array<{ id: number; url?: string; title?: string; connectionId?: string }>,
 ) {
   const listing: Record<string, PlistValue> = {};
   for (const p of pages) {
@@ -108,6 +108,7 @@ export function sendListing(
       WIRTitleKey: p.title ?? `page ${p.id}`,
       WIRURLKey: p.url ?? `https://example.com/${p.id}`,
       WIRTypeKey: "WIRTypeWebPage",
+      ...(p.connectionId ? { WIRConnectionIdentifierKey: p.connectionId } : {}),
     };
   }
   rig.push("_rpc_applicationSentListing:", {
@@ -195,4 +196,77 @@ export async function waitUntil(fn: () => boolean, ms = 2000): Promise<boolean> 
     await new Promise((r) => setTimeout(r, 10));
   }
   return fn();
+}
+
+/**
+ * A fake webinspectord: a fake WIR connection that answers
+ * _rpc_reportIdentifier: / _rpc_getConnectedApplications: with an app list
+ * and _rpc_forwardGetListing: with `pages`, after `replyDelayMs` (models the
+ * launchd respawn throttle). `silent` never answers.
+ */
+export function makeFakeDaemon(
+  opts: {
+    replyDelayMs?: number;
+    silent?: boolean;
+    /** Only push the app list after _rpc_reportIdentifier: (some iOS
+     *  versions never answer _rpc_getConnectedApplications:). */
+    ignoreGetConnectedApplications?: boolean;
+    /** Close the connection this long after the first reply. */
+    dropAfterMs?: number;
+    pages?: Array<{ id: number; url?: string; title?: string }>;
+    appId?: string;
+    /** Answer from unref'd timers, like a real daemon over an unref'd socket:
+     *  a pending reply doesn't keep the process alive. */
+    unrefReplies?: boolean;
+  } = {},
+) {
+  const rig = makeFakeWir();
+  const appId = opts.appId ?? "PID:1";
+  const pages = opts.pages ?? [{ id: 1 }];
+  let seen = 0;
+  let firstReplyAt: number | null = null;
+  const startedAt = Date.now();
+  const origWrite = rig.sock.write.bind(rig.sock);
+  rig.sock.write = (chunk: Uint8Array) => {
+    const ok = origWrite(chunk);
+    if (opts.silent) return ok;
+    const msgs = rig.sent();
+    const fresh = msgs.slice(seen);
+    seen = msgs.length;
+    for (const m of fresh) {
+      const reply = () => {
+        if (rig.sock.destroyed) return;
+        if (firstReplyAt === null && opts.dropAfterMs !== undefined) {
+          setTimeout(() => rig.sock.emit("close"), opts.dropAfterMs);
+        }
+        firstReplyAt ??= Date.now();
+        if (m.__selector === "_rpc_getConnectedApplications:" && opts.ignoreGetConnectedApplications) return;
+        if (m.__selector === "_rpc_reportIdentifier:" || m.__selector === "_rpc_getConnectedApplications:") {
+          rig.push("_rpc_reportConnectedApplicationList:", {
+            WIRApplicationDictionaryKey: {
+              [appId]: {
+                WIRApplicationIdentifierKey: appId,
+                WIRApplicationBundleIdentifierKey: "com.apple.mobilesafari",
+                WIRApplicationNameKey: "Safari",
+                WIRIsApplicationProxyKey: false,
+              },
+            },
+          });
+        } else if (m.__selector === "_rpc_forwardGetListing:") {
+          sendListing(rig, appId, pages);
+        }
+      };
+      // The daemon only starts answering once the throttle has elapsed.
+      const wait = Math.max(0, startedAt + (opts.replyDelayMs ?? 0) - Date.now());
+      const t = setTimeout(reply, wait);
+      if (opts.unrefReplies) t.unref();
+    }
+    return ok;
+  };
+  return {
+    ...rig,
+    get firstReplyAt() {
+      return firstReplyAt;
+    },
+  };
 }

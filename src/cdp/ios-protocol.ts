@@ -23,7 +23,7 @@ import { installDomDebuggerFilters } from "./domains/dom-debugger";
 import { installPageFilters } from "./domains/page";
 import { installOverlayFilters } from "./domains/overlay";
 import { installEmulationFilters } from "./domains/emulation";
-import { installNetworkFilters } from "./domains/network";
+import { installNetworkFilters, type NetworkFilterOptions } from "./domains/network";
 import { installTargetFilters } from "./domains/target";
 import { installInspectorFilters } from "./domains/inspector";
 import { installCssFilters } from "./domains/css";
@@ -33,7 +33,11 @@ import { installIoFilters } from "./domains/io";
 import { installAccessibilityFilters } from "./domains/accessibility";
 import { installCdpOnlyStubs } from "./domains/cdp-only-stubs";
 
-export function installIOSFilters(t: Target) {
+export type IOSFilterOptions = {
+  network?: NetworkFilterOptions;
+};
+
+export function installIOSFilters(t: Target, opts: IOSFilterOptions = {}) {
   // Per-session state — kept on a closure-local context object (NOT
   // module-level) so multiple concurrent DevTools sessions don't stomp
   // each other. State used by exactly one domain stays inside that
@@ -61,7 +65,7 @@ export function installIOSFilters(t: Target) {
   installPageFilters(t, ctx);
   installOverlayFilters(t);
   installEmulationFilters(t);
-  installNetworkFilters(t, ioCache);
+  installNetworkFilters(t, ioCache, opts.network);
   installTargetFilters(t);
   installInspectorFilters(t);
   installCssFilters(t);

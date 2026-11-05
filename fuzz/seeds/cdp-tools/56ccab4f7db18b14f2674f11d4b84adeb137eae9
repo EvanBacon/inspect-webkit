@@ -1,0 +1,24 @@
+OR{"m":"DOM.requestNode","error":{"code":-32000,"message":"Missing node for given objectId","data":[{"code":-32000,"message":"Missing node for given objectId"}]}}
+R{"m":"DOMDebugger.setDOMBreakpoint","result":{}}
+R{"m":"DOMDebugger.removeDOMBreakpoint","result":{}}
+R{"m":"Runtime.evaluate","result":{"result":{"type":"string","value":"https://www.iana.org/help/example-domains"},"wasThrown":false}}
+R{"m":"Runtime.evaluate","result":{"result":{"type":"string","value":"Example Domains"},"wasThrown":false}}
+R{"m":"Runtime.evaluate","result":{"result":{"type":"boolean","value":true},"wasThrown":false}}
+T{"method":"DOMDebugger.setDOMBreakpoint","params":{"nodeId":16,"type":"subtree-modified"}}
+T{"method":"DOMDebugger.removeDOMBreakpoint","params":{"nodeId":16,"type":"subtree-modified"}}
+T{"method":"Runtime.evaluate","params":{"expression":"window.location.href"}}
+W{"method":"Debugger.scriptParsed","params":{"scriptId":"17","url":"","startLine":0,"startColumn":0,"endLine":0,"endColumn":20,"isContentScript":false,"module":false}}
+T{"method":"Runtime.evaluate","params":{"expression":"document.title"}}
+W{"method":"Debugger.scriptParsed","params":{"scriptId":"18","url":"","startLine":0,"startColumn":0,"endLine":0,"endColumn":14,"isContentScript":false,"module":false}}
+T{"method":"Runtime.evaluate","params":{"expression":"(function(){var u=\"https://example.com/\";setTimeout(function(){location.href=u},0);return true})()","returnByValue":true}}
+W{"method":"Debugger.scriptParsed","params":{"scriptId":"19","url":"","startLine":0,"startColumn":0,"endLine":0,"endColumn":98,"isContentScript":false,"module":false}}
+W{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-139","type":"page","isProvisional":true}}}
+T{"method":"Network.enable","params":{"maxPostDataSize":65536}}
+T{"method":"Page.enable","params":{}}
+T{"method":"Runtime.enable","params":{}}
+T{"method":"Debugger.enable","params":{"maxScriptsCacheSize":10000000}}
+T{"method":"Debugger.setPauseOnDebuggerStatements","params":{"enabled":true}}
+T{"method":"Console.enable","params":{}}
+T{"method":"Inspector.enable","params":{}}
+T{"method":"Network.setResourceCachingDisabled","params":{"disabled":true}}
+T{"method":"Debugger.setBreakpointByUrl","params":{"lineNumber":0,"urlRegex":"cap-bp\\.js","columnNumber":0,"options":{}}}

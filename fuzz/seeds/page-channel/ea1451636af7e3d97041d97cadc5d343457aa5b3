@@ -1,0 +1,14 @@
+IR{"m":"DOM.discardSearchResults","result":{}}
+R{"m":"DOM.setInspectModeEnabled","error":{"code":-32000,"message":"Internal error: highlight configuration parameter is missing","data":[{"code":-32000,"message":"Internal error: highlight configuration parameter is missing"}]}}
+R{"m":"DOM.setInspectModeEnabled","result":{}}
+R{"m":"DOM.requestNode","error":{"code":-32000,"message":"Missin@g node for given objectId","data":[{"code":-32000,"message":"Missing node for given objectId"}]}}
+R{"m":"DOMDebugger.setDOMBreakpoint","result":{}}
+R{"m":"DOMDebugger.removeDOMBreakpoint","result":{}}
+R{"m":"Runtime.evaluate","result":{"result":{"type":"string","value":"https://www.iana.org/@g node for given objectId","data":[{"code":-32000,"message":"Missing node for given objectId"}]}}
+R{"m":"DOMDebugger.setDOMBreakpoint","result":{}}
+R{"m":"DOMDebugger.removeDOMBreakpoint","result":{}}
+R{"m":"Runtime.evaluate","result":{"result":{"type":"string","value":"https://www.iana.org/help/example-domains"},"wasThrown":false}}
+R{"m":"Runtime.evaluate","result":{"result":{"type":"string","value":"Example Domaine}}
+0T{"method":"DOM.setInspectModeEnabled","params":{"enabled":false,"highlightConfig":{}}}
+2T{"method":"DOM.requestNode","params":{"objectId":"x"}}
+1T{"metho}}

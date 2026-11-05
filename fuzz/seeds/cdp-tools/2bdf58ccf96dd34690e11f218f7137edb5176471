@@ -1,0 +1,11 @@
+UR{"m":"DOM.hideHighlight","result":{}}
+R{"m":"DOM.setInspectModeEnabled","result":{}}
+R{"m":"Runtime.evaluate","result":{"result":{"type":"object","objectId":"{\"injectedScriptId\":5,\"id\":1}","subtype":"error","className":"ReferenceError","description":"ReferenceError: Can't find variable: __sd_simulate"},"wasThrown":true}}
+R{"m":"Page.overrideUserAgent","result":{}}
+R{"m":"Network.loadResource","result":{"content":"<!doctype html><html lang=en><head><meta charset=utf-8><link rel=icon href=data:,><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>Example Domain</title><style>html{color-scheme:light dark;background:light-dark(#eee,#222)}body{font:16px/1.6 system-ui,sans-serif;max-width:26em;margin:auto;padding:25vh 2em 2em;text-align:center}</style></head><body><p>This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.</p><script src=/s.js></script></body></html>\n","mimeType":"text/html","status":200}}
+T{"method":"DOM.hideHighlight","params":{}}
+T{"method":"DOM.setInspectModeEnabled","params":{"enabled":false,"highlightConfig":{}}}
+T{"method":"Runtime.evaluate","params":{"expression":"(\nfunction __sd_simulate(p){\n  var el = document.elementFromPoint(p.x, p.y);\n  if (!el) return false;\n  var ev = new MouseEvent(p.type, {\n    screenX: p.x, screenY: p.y, clientX: p.x, clientY: p.y,\n    ctrlKey:  (p.modifiers & 2) === 2,\n    altKey:   (p.modifiers & 1) === 1,\n    shiftKey: (p.modifiers & 8) === 8,\n    metaKey:  (p.modifiers & 4) === 4,\n    button: p.button === \"left\" ? 0 : p.button === \"middle\" ? 1 : p.button === \"right\" ? 2 : 0,\n    bubbles: true, cancelable: true,\n  });\n  el.dispatchEvent(ev);\n  return true;\n}, __sd_simulate({\"x\":0,\"y\":0,\"modifiers\":0,\"button\":\"none\",\"type\":\"mousemove\"}))"}}
+W{"method":"Debugger.scriptParsed","params":{"scriptId":"15","url":"","startLine":0,"startColumn":0,"endLine":15,"endColumn":81,"isContentScript":false,"module":false}}
+T{"method":"Page.overrideUserAgent","params":{"value":"inspect-webkit-probe/2"}}
+T{"method":"Network.loadResource","params":{"frameId":"0.1","url":"https://example.com/"}}

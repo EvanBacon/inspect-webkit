@@ -1,0 +1,12 @@
+ER{"m":"Debugger.setBreakpointsActive","result":{}}
+R{"m":"Debugger.setPauseOnDebuggerStatements","result":{}}
+R{"m":"Debugger.setPauseOnExceptions","result":{}}
+R{"m":"Console.enable","result":{}}
+R{"m":"Page.setEmulatedMedia","result":{}}
+R{"m":"Inspector.enable","result":{}}
+R{"m":"Runtime.evaluate","result":{"result":{"type":"string","value":"Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Mobile/15E148 Safari/604.1"},"wasThrown":false}}
+0T{"method":"Console.enable","params":{}}
+2T{"method":"Page.setEmulatedMedia","params":{"media":"","features":[]}}
+1T{"method":"Inspector.enable","params":{}}
+0T{"method":"Runtime.evaluate","params":{"expression":"navigator.userAgent"}}
+W{"method":"Debugger.scriptParsed","params":{"scriptId":"12","url":"","startLine":0,"startColumn":0,"endLine":0,"endColumn":19,"isContentScript":false,"module":false}}

@@ -8,6 +8,7 @@
 import type { Target, CdpMessage } from "../target";
 import { isPlainObject, swallowWith } from "../domain";
 import type { IoCache } from "./io";
+import { refetch, type RefetchDeps, type ResponseBodyRefetch } from "../refetch";
 
 // CDP -> WIR method renames for pure tools-side passthroughs.
 // Param shapes already line up (verified against WebKit Network.json /
@@ -128,15 +129,25 @@ function wirCookieToCdp(c: any) {
   };
 }
 
-export function installNetworkFilters(t: Target, ioCache?: IoCache) {
-  // Track requestId → {url, method, headers, frameId} from requestWillBeSent
-  // so we can satisfy Network.getResponseBody by re-fetching the URL ourselves.
-  // Safari's forward socket doesn't carry response bodies. We previously
-  // re-fetched via WIR Network.loadResource, but that returns content as a
-  // plain JSON string — binary bytes get mangled by UTF-8 round-tripping
-  // (DevTools' Preview pane showed glitched JPEGs and replacement-char
-  // soup for AVIF/woff). Doing the re-fetch from the bridge process with
-  // Node fetch preserves bytes exactly. Cap map at 1k entries to bound memory.
+export type NetworkFilterOptions = {
+  /** Host-side fallback for Network.getResponseBody. Default "public". */
+  responseBodyRefetch?: ResponseBodyRefetch;
+  /** Ports the bridge listens on (never re-fetched on this machine). */
+  bridgePorts?: () => number[];
+  /** @internal Test seam: DNS / HTTP for the re-fetch. */
+  refetchDeps?: RefetchDeps;
+};
+
+/** How long to wait for WebKit's own Network.getResponseBody. */
+const NATIVE_BODY_TIMEOUT_MS = 5_000;
+
+export function installNetworkFilters(t: Target, ioCache?: IoCache, opts: NetworkFilterOptions = {}) {
+  const policy = opts.responseBodyRefetch ?? "public";
+  // Track requestId → {url, method, headers, documentURL} from
+  // requestWillBeSent for the getResponseBody re-fetch fallback. (WIR
+  // Network.loadResource returns content as a plain JSON string, which
+  // mangles binary bodies, so the fallback fetches from the bridge process.)
+  // Cap map at 1k entries to bound memory.
   const requestUrls = new Map<
     string,
     {
@@ -144,6 +155,8 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
       method?: string;
       headers?: Record<string, string>;
       frameId?: string;
+      /** The requesting document; scopes which credentials may be re-sent. */
+      documentURL?: string;
       // Running tally of bytes seen via Network.dataReceived. We use this
       // to short-circuit getResponseBody for empty bodies (preconnects,
       // preloads, 204s) so the re-fetch queue isn't burning slots on them.
@@ -159,6 +172,7 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
   // observed to drop the connection ("Debugging connection was closed").
   // 4 MB leaves headroom after base64 (~5.4 MB) plus JSON escaping.
   const REFETCH_MAX_BYTES = 4 * 1024 * 1024;
+  const REFETCH_MAX_REDIRECTS = 3;
   // Serialize re-fetches so a click-storm in the Network panel can't
   // fan out N concurrent downloads (each buffering a full body in RAM).
   let refetchChain: Promise<unknown> = Promise.resolve();
@@ -292,84 +306,62 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
   t.addMessageFilter("tools::Network.setMonitoringXHREnabled", (msg) =>
     swallowWith(t, msg, {}),
   );
-  // Network.getResponseBody — Safari doesn't deliver response bodies on
-  // the inspector socket. We re-fetch the tracked URL from the bridge
-  // process (Node fetch) and base64-encode binary bodies. This is what
-  // makes the Network panel's Preview / Response tabs render — without
-  // it DevTools shows a spinning placeholder forever.
+  // Network.getResponseBody — ask WebKit first (it has the body for most
+  // resources still in memory). Only when that fails do we fall back to
+  // re-fetching the URL from the bridge process, which is policy-gated and
+  // locked down in ../refetch.ts (review #10: the URL is page-chosen).
   //
-  // Caveats: this is a fresh request, not a replay of the original. POST
-  // bodies aren't recoverable; cookie/auth state is best-effort (we forward
-  // the request headers we observed, including any Cookie header). Server
-  // 304/redirect handling differs from the original navigation.
+  // Caveats of the fallback: it is a fresh GET, not a replay. POST bodies
+  // aren't recoverable; Cookie/Authorization are only sent same-origin to
+  // the page; the server may answer differently than it did the page.
   t.addMessageFilter("tools::Network.getResponseBody", async (msg) => {
     const requestId = msg.params?.requestId;
+    let nativeError: string;
+    try {
+      const r = await t.callTarget("Network.getResponseBody", { requestId }, NATIVE_BODY_TIMEOUT_MS);
+      if (typeof r?.body === "string") {
+        t.fireResultToTools(msg.id!, { body: r.body, base64Encoded: !!r.base64Encoded });
+        return null;
+      }
+      nativeError = "WebKit returned no body";
+    } catch (e: any) {
+      nativeError = e?.message ?? String(e);
+    }
+    const fail = (message: string) => t.fireErrorToTools(msg.id!, { message: `Network.getResponseBody: ${message}` });
     const known = typeof requestId === "string" ? requestUrls.get(requestId) : undefined;
-    if (!known) {
-      t.fireErrorToTools(msg.id!, {
-        message: "Network.getResponseBody: requestId not tracked (only requests observed via requestWillBeSent are recoverable)",
-      });
-      return null;
-    }
+    if (policy === "off") return fail(nativeError), null;
+    if (!known) return fail(`${nativeError} (and the request was not observed, so it can't be re-fetched)`), null;
     if (known.method && known.method.toUpperCase() !== "GET") {
-      t.fireErrorToTools(msg.id!, {
-        message: `Network.getResponseBody: cannot recover ${known.method} response body (bridge re-fetch is GET-only)`,
-      });
-      return null;
+      return fail(`${nativeError} (re-fetch is GET-only; can't recover a ${known.method} body)`), null;
     }
-    // Short-circuit empty bodies (preconnects, 204s, preloads with 0 bytes).
-    // Re-fetching them is wasted work that ties up the queue and can block
-    // real bodies behind a slow no-op.
+    // Empty bodies (preconnects, 204s, 0-byte preloads): nothing to fetch.
     if (known.bytes === 0) {
       t.fireResultToTools(msg.id!, { body: "", base64Encoded: false });
       return null;
     }
     queueRefetch(async () => {
       try {
-        // Forward the original request headers so cookie/auth-gated assets
-        // come back with the same body. Drop hop-by-hop and conditional
-        // headers — we want the full body, not a 304.
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(known.headers ?? {})) {
-          const lk = k.toLowerCase();
-          if (lk === "if-none-match" || lk === "if-modified-since" || lk === "host" || lk === "connection") continue;
-          headers[k] = String(v);
-        }
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), REFETCH_TIMEOUT_MS);
-        let res: Response;
-        try {
-          res = await fetch(known.url, { headers, redirect: "follow", signal: ac.signal });
-        } finally {
-          clearTimeout(timer);
-        }
-        // Bail before downloading if the server tells us the body is too big.
-        const cl = Number(res.headers.get("content-length") ?? "");
-        if (Number.isFinite(cl) && cl > REFETCH_MAX_BYTES) {
-          t.fireErrorToTools(msg.id!, {
-            message: `Network.getResponseBody: response too large (${cl} bytes > ${REFETCH_MAX_BYTES}) — skipped re-fetch`,
-          });
-          // Drain so the connection can be reused.
-          try { await res.arrayBuffer(); } catch {}
-          return;
-        }
-        const buf = Buffer.from(await res.arrayBuffer());
-        if (buf.byteLength > REFETCH_MAX_BYTES) {
-          t.fireErrorToTools(msg.id!, {
-            message: `Network.getResponseBody: response too large (${buf.byteLength} bytes > ${REFETCH_MAX_BYTES})`,
-          });
-          return;
-        }
-        const mimeType = ((res.headers.get("content-type") ?? "").split(";")[0] ?? "").trim();
+        const res = await refetch(
+          known.url,
+          {
+            policy,
+            headers: known.headers ?? {},
+            documentURL: known.documentURL,
+            bridgePorts: opts.bridgePorts?.() ?? [],
+            timeoutMs: REFETCH_TIMEOUT_MS,
+            maxBytes: REFETCH_MAX_BYTES,
+            maxRedirects: REFETCH_MAX_REDIRECTS,
+          },
+          opts.refetchDeps,
+        );
+        const buf = Buffer.from(res.body.buffer, res.body.byteOffset, res.body.byteLength);
         // Text-shaped MIMEs that round-trip cleanly as UTF-8. Everything else
         // (images, fonts, video, octet-stream, …) goes back as base64.
-        const isText = /^(text\/|image\/svg\+xml|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded))$/.test(mimeType);
+        const isText = /^(text\/[^;]*|image\/svg\+xml|application\/(json|xml|javascript|ecmascript|x-www-form-urlencoded))$/.test(res.mimeType);
         const body = isText ? buf.toString("utf8") : buf.toString("base64");
         t.fireResultToTools(msg.id!, { body, base64Encoded: !isText });
       } catch (e: any) {
-        t.fireErrorToTools(msg.id!, {
-          message: `Network.getResponseBody re-fetch failed: ${e?.message ?? String(e)}`,
-        });
+        fail(`${nativeError}; re-fetch failed: ${e?.message ?? String(e)}`);
       }
     });
     return null;
@@ -404,6 +396,7 @@ export function installNetworkFilters(t: Target, ioCache?: IoCache) {
           method: p.request.method,
           headers: p.request.headers,
           frameId: p.frameId,
+          documentURL: typeof p.documentURL === "string" ? p.documentURL : undefined,
           bytes: 0,
         });
       }

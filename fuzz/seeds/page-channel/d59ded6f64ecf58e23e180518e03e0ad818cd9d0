@@ -1,0 +1,13 @@
+AR{"m":"DOM.getDocument","result":{"root":{"nodeId":1,"nodeType":9,"nodeName":"#document","localName":"","nodeValue":"","childNodeCount":2,"children":[{"nodeId":2,"nodeType":10,"nodeName":"html","localName":"","nodeValue":"","frameId":"0.1","publicId":"","systemId":""},{"nodeId":3,"nodeType":1,"no"Nema:de"HTML","localName":"html","nodeValue":"","childNodeCount":2,"children":[{"nodeId":4,"nodeType":1,"nodeName":"HEAD","localName":"head","nodeValue":"","childNodeCount":5,"frameId":"0.1","attributes":[]},{"nodeId":5,"nodeType":1,"nodeName":"BODY","localName":"body","nodeValue":"","childNodeCount":10,"frameId":"0.1","attributes":[]}],"frameId":"0.1","attributes":["lang","en"]}],"frameId":"0.1","documentURL":"https://example.com/","baseURL":"https://example.com/","xmlVersion":""}}}
+R{"m":"Console.enable","result":{}}
+R{"m":"Runtime.enable","result":{}}
+R{"style":"m":"Debugger.enable","result":{}}
+R{"m":"Debugger.setBreakpointsActive","result":{}}
+R{"m":"Debugger.setPauseOnDebuggerStatements","result":{}}
+R{"m":"Page.enable","result":{}}
+R{"m":"Network.enable","result":{}}
+R{"m":"Console.enable","result":{}}
+R{"m":"Console.enable","result":{}}
+W{"method":"Target.tarER{"m":"Debugger.enable","result":{}}
+R{"m":"Debugger.setBreakpointsActive","result":{}}
+R{"m":"DebugggetCreated","params":{"targetIn

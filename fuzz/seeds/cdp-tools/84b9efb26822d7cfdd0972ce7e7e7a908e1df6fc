@@ -1,0 +1,24 @@
+WR{"m":"Page.setCookie","result":{}}
+R{"m":"Page.deleteCookie","result":{}}
+R{"m":"Page.getCookies","result":{"cookies":[]}}
+R{"m":"Network.getResponseBody","error":{"code":-32000,"message":"Missing resource for given requestId","data":[{"code":-32000,"message":"Missing resource for given requestId"}]}}
+R{"m":"CSS.getInlineStylesForNode","error":{"code":-32000,"message":"Missing node for given nodeId","data":[{"code":-32000,"message":"Missing node for given nodeId"}]}}
+R{"m":"CSS.getMatchedStylesForNode","error":{"code":-32000,"message":"Missing node for given nodeId","data":[{"code":-32000,"message":"Missing node for given nodeId"}]}}
+R{"m":"CSS.getInlineStylesForNode","error":{"code":-32000,"message":"Missing node for given nodeId","data":[{"code":-32000,"message":"Missing node for given nodeId"}]}}
+R{"m":"CSS.addRule","error":{"code":-32000,"message":"Missing style sheet for given styleSheetId","data":[{"code":-32000,"message":"Missing style sheet for given styleSheetId"}]}}
+R{"m":"DOM.performSearch","result":{"searchId":"0.3","resultCount":2}}
+R{"m":"Runtime.releaseObjectGroup","result":{}}
+R{"m":"Debugger.setBreakpointByUrl","result":{"breakpointId":"about:blank:0:0","locations":[]}}
+R{"m":"Page.setShowPaintRects","result":{}}
+T{"method":"Page.setCookie","params":{"cookie":{"name":"sdtprobe","value":"1","domain":"example.com","path":"/","expires":-1,"session":false,"httpOnly":false,"secure":false,"sameSite":"None"}}}
+T{"method":"Page.deleteCookie","params":{"cookieName":"sdtprobe","url":"https://example.com/"}}
+T{"method":"Page.getCookies","params":{}}
+T{"method":"Network.getResponseBody","params":{"requestId":"0"}}
+T{"method":"CSS.getInlineStylesForNode","params":{"nodeId":1}}
+T{"method":"CSS.getMatchedStylesForNode","params":{"nodeId":1,"includePseudo":true,"includeInherited":true}}
+T{"method":"CSS.getInlineStylesForNode","params":{"nodeId":1}}
+T{"method":"CSS.addRule","params":{"contextNodeId":1,"styleSheetId":"0","selector":".dummy"}}
+T{"method":"DOM.performSearch","params":{"query":"body","caseSensitive":false}}
+T{"method":"Runtime.releaseObjectGroup","params":{"objectGroup":"console"}}
+T{"method":"Debugger.setBreakpointByUrl","params":{"lineNumber":0,"url":"about:blank","options":{}}}
+T{"method":"Page.setShowPaintRects","params":{"result":false}}

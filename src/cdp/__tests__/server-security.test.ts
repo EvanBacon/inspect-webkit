@@ -192,3 +192,8 @@ test("server: default bind reports exactly the loopback addresses", async () => 
   for (const a of addrs) expect(["127.0.0.1", "::1"]).toContain(a);
   expect(addrs).toContain("127.0.0.1");
 });
+
+test("an unknown responseBodyRefetch mode is rejected at startup (review #10)", async () => {
+  await expect(startCdpServer({ port: await freePort(), responseBodyRefetch: "everything" as any, openSources: async () => [] })).rejects.toThrow(/responseBodyRefetch/);
+  await expect(startBunCdpServer({ port: await freePort(), upstreams: [], responseBodyRefetch: 1 as any })).rejects.toThrow(/responseBodyRefetch/);
+});

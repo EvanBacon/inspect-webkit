@@ -1,8 +1,7 @@
 // Session lifecycle in the Safari CDP server, driven through a fake WIR
 // source: a dead source / disconnected app / vanished page must close the
-// DevTools WebSocket (R6) instead of leaving it hanging, and a second
-// attach to the same page replaces the first instead of silently wedging
-// it (R7).
+// DevTools WebSocket (R6) instead of leaving it hanging. Several clients
+// on one page (R7) are covered in server-sharing.test.ts.
 
 import { test, expect, afterEach } from "bun:test";
 import { startCdpServer, type CdpServer } from "../server";
@@ -109,26 +108,6 @@ test("a page that reappears resets the miss counter", async () => {
   expect(c1.closed).toBeNull();
 });
 
-test("second attach to the same page replaces the first with 1011 (R7)", async () => {
-  const { port, wir } = await rig();
-  const a = await connect(port, 1);
-  await waitUntil(() => setupsFor(wir, "_rpc_forwardSocketSetup:").length === 1);
-  const b = await connect(port, 1);
-  expect(await waitUntil(() => a.closed !== null)).toBe(true);
-  expect(a.closed!.code).toBe(1011);
-  expect(a.closed!.reason).toMatch(/replaced by a newer DevTools session/);
-  expect(b.closed).toBeNull();
-  // Old sender was released before the new one was set up.
-  const setups = setupsFor(wir, "_rpc_forwardSocketSetup:");
-  const closes = setupsFor(wir, "_rpc_forwardDidClose:");
-  expect(setups.length).toBe(2);
-  expect(closes).toContain(setups[0]!);
-  const msgs = wir.sent().map((m) => `${m.__selector}${(m.__argument as any).WIRSenderKey}`);
-  expect(msgs.indexOf(`_rpc_forwardDidClose:${setups[0]}`)).toBeLessThan(
-    msgs.indexOf(`_rpc_forwardSocketSetup:${setups[1]}`),
-  );
-});
-
 test("hostile frames over a real WS do not kill the server (R2/R3)", async () => {
   const { port, server } = await rig();
   const c = await connect(port, 1);
@@ -155,27 +134,4 @@ test("an app dropped from a full application list closes its sessions", async ()
   wir.push("_rpc_reportConnectedApplicationList:", { WIRApplicationDictionaryKey: {} });
   expect(await waitUntil(() => c.closed !== null)).toBe(true);
   expect(c.closed!.code).toBe(1011);
-});
-
-test("browser-endpoint auto-attach does not steal a page from a live DevTools session", async () => {
-  const { port } = await rig();
-  const page = await connect(port, 1);
-  const version = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()) as any;
-  const bws = new WebSocket(version.webSocketDebuggerUrl.replace("localhost", "127.0.0.1"));
-  const frames: any[] = [];
-  bws.onmessage = (e) => frames.push(JSON.parse(String(e.data)));
-  cleanups.push(() => bws.close());
-  await new Promise<void>((r) => (bws.onopen = () => r()));
-  bws.send(JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true, flatten: true } }));
-  expect(await waitUntil(() => frames.some((f) => f.id === 1))).toBe(true);
-  const attached = frames
-    .filter((f) => f.method === "Target.attachedToTarget")
-    .map((f) => f.params.targetInfo.targetId);
-  expect(attached).toEqual(["sim:fake:PID:1:2"]);
-  await new Promise((r) => setTimeout(r, 100));
-  expect(page.closed).toBeNull();
-  // An explicit attach still wins (newest explicit session).
-  bws.send(JSON.stringify({ id: 2, method: "Target.attachToTarget", params: { targetId: "sim:fake:PID:1:1", flatten: true } }));
-  expect(await waitUntil(() => page.closed !== null)).toBe(true);
-  expect(page.closed!.reason).toMatch(/replaced/);
 });

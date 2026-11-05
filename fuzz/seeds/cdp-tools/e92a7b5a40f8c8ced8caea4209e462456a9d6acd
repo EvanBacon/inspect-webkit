@@ -1,0 +1,16 @@
+YT{"method":"Page.reload","params":{"ignoreCache":true}}
+T{"method":"Runtime.evaluate","params":{"expression":"1+1","returnByValue":true}}
+T{"method":"Runtime.evaluate","params":{"expression":"document.title","includeCommandLineAPI":true}}
+T{"method":"Runtime.evaluate","params":{"expression":"console.log('cap', {a:1,b:[1,2]}, 2n ** 70n); console.warn('w'); console.error(new Error('e')); console.table([{x:1}])"}}
+T{"method":"Runtime.evaluate","params":{"expression":"throw new TypeError('boom')"}}
+T{"method":"Runtime.evaluate","params":{"expression":"Promise.reject(new Error('rej'))","awaitPromise":true}}
+T{"method":"Runtime.evaluate","params":{"expression":"new Promise(r => setTimeout(() => r(42), 10))","awaitPromise":true,"returnByValue":true}}
+T{"method":"Runtime.evaluate","params":{"expression":"'x'.repeat(100000)","returnByValue":true}}
+T{"method":"Runtime.evaluate","params":{"expression":"setTimeout(() => { undefinedFn() }, 0)"}}
+T{"method":"Runtime.evaluate","params":{"expression":"({n:1, s:'s', a:[1,{}], f(){}, d:new Date(0), m:new Map([[1,2]]), sym:Symbol('q')})","objectGroup":"console","generatePreview":true}}
+T{"method":"Runtime.getProperties","params":{"objectId":"{\"injectedScriptId\":5,\"id\":8}","ownProperties":true,"generatePreview":true}}
+T{"method":"Runtime.getProperties","params":{"objectId":"{\"injectedScriptId\":5,\"id\":8}","accessorPropertiesOnly":true}}
+T{"method":"Runtime.callFunctionOn","params":{"objectId":"{\"injectedScriptId\":5,\"id\":8}","functionDeclaration":"function(){ return Object.keys(this) }","returnByValue":true}}
+T{"method":"Runtime.releaseObject","params":{"objectId":"{\"injectedScriptId\":5,\"id\":8}"}}
+T{"method":"Runtime.compileScript","params":{"expression":"let q = 1","sourceURL":"","persistScript":false}}
+T{"method":"Runtime.globalLexicalScopeNames","params":{}}

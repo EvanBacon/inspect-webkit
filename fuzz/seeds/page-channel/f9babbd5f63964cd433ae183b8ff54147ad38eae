@@ -1,0 +1,6 @@
+ER{"m":"Page.ge‡­esourceTree","result":{"frameTree":{"fram7e":{"id":"0.1","loaderId":"0.2","url":"https://example.com/","mimeType":"text/html","sample.coÿÿÿÿÿÿta":[{"code":-3200result":{"frameTree":{"fram7e":{"id":"0.1","loaderId":"0.2","url":tst":hp//example.com/","mimeType":"text/html","securityOrigin":"https://example.com"},"òesources":[{"url":"https://example.coÿÿÿÿÿÿta":[{"code":-31999,"message":"Missing resou,"params":{"cookie":{"name":"sdtprobe","value":"1","domain":"example.com","path":"/","expires":-1,"session":false,"httpOnly":false,"secure":false,"sameSite":"None"}}}
+2T{"method":"Page.deleteCookie","params":{"cookieName":"sdtprobe","url":"https://example.com/"}}
+1T{"method":"Page.getCookies","params":{}}
+0T{"method":"Network.getResponseBodyb,"params":{"requestId":"0"}}
+2T{"method":"CSS.getInlineStylesForNode","params":{"nodeId":1}}
+0T{"method":"CSS.getMatchedStylesForNode","params":{"nodeId":1,"includePseudo":true,"includeInherited":true}}

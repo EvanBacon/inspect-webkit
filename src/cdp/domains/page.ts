@@ -1,5 +1,6 @@
 import type { Target } from "../target";
 import { swallowWith, type DomainCtx } from "../domain";
+import { installPageNavigateFilters } from "./page-navigate";
 
 // Page domain. Most CDP Page methods either pass straight through to WIR
 // (Safari's `Page` domain matches the CDP shape closely) or are pure stubs
@@ -50,9 +51,9 @@ export function installPageFilters(t: Target, ctx: DomainCtx) {
   // but iOS 26 Safari handles it cleanly.) We forward instead of swallow so
   // Safari can release any resources it holds.
 
-  // Page.navigate / Page.reload — pure pass-through. Safari's params shape
-  // matches CDP for both (url + transitionType ignored vs. ignoreCache+
-  // scriptToEvaluateOnLoad ignored). No filter needed.
+  // Page.navigate — native when WebKit has it, else a location.href shim
+  // (iOS 27); see ./page-navigate.ts. Page.reload is a pure pass-through.
+  installPageNavigateFilters(t);
 
   // Schema.getDomains: leave passthrough. Stubbing it caused DevTools to
   // believe we fully implement Network/etc., then call methods we don't

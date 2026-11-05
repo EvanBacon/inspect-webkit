@@ -9,6 +9,7 @@ import { installIOSFilters } from "../ios-protocol";
 function makeRig(opts: { filters?: boolean; targetBased?: boolean } = {}) {
   const toTools: any[] = [];
   const toTarget: any[] = [];
+  const outerIds = new Map<number, number>(); // inner id -> envelope id
   const ws = {
     readyState: 1,
     send(text: string) {
@@ -19,14 +20,17 @@ function makeRig(opts: { filters?: boolean; targetBased?: boolean } = {}) {
     forwardSocketData(_a: string, _p: number, _s: string, bytes: Uint8Array) {
       const outer = JSON.parse(new TextDecoder().decode(bytes));
       // Unwrap Target.sendMessageToTarget so tests see the inner command.
-      if (outer.method === "Target.sendMessageToTarget") toTarget.push(JSON.parse(outer.params.message));
-      else toTarget.push(outer);
+      if (outer.method === "Target.sendMessageToTarget") {
+        const inner = JSON.parse(outer.params.message);
+        outerIds.set(inner.id, outer.id);
+        toTarget.push(inner);
+      } else toTarget.push(outer);
     },
     forwardDidClose() {},
   };
   const t = new Target(ws as any, wi as any, "PID:1", 1, "sender");
   if (opts.filters !== false) installIOSFilters(t);
-  return { t, toTools, toTarget };
+  return { t, toTools, toTarget, outerIds };
 }
 
 async function targetBased(rig: ReturnType<typeof makeRig>) {
@@ -112,7 +116,7 @@ test("a throwing target-side filter passes the raw message through", async () =>
   await rig.t.onMessageFromTools(JSON.stringify({ id: 9, method: "Boom.go" }));
   // Outer Target.sendMessageToTarget ack first, then the inner reply
   // wrapped — Safari's usual order in target-based mode.
-  await rig.t.onMessageFromTarget(JSON.stringify({ id: 9, result: {} }));
+  await rig.t.onMessageFromTarget(JSON.stringify({ id: rig.outerIds.get(9), result: {} }));
   const inner = JSON.stringify({ id: 9, result: { ok: true } });
   await expect(
     rig.t.onMessageFromTarget(
@@ -141,3 +145,32 @@ test("close() rejects pending callTarget promises", async () => {
   // Further calls fail fast.
   await expect(rig.t.callTarget("DOM.getDocument", {})).rejects.toThrow();
 });
+
+// Found by the live fuzzer (fuzzlite2): a *request* named after an event
+// (Console.messageAdded, Inspector.inspect, …) gets Safari's "not found"
+// error, and that reply ran through the event's target-side filter, which
+// swallows events — so the client never got an answer.
+const EVENT_NAMES = [
+  "Console.messageAdded",
+  "Console.messagesCleared",
+  "Console.messageRepeatCountUpdated",
+  "Console.heapSnapshot",
+  "Inspector.inspect",
+  "Debugger.globalObjectCleared",
+];
+for (const method of EVENT_NAMES) {
+  test(`a request named ${method} still gets exactly one reply`, async () => {
+    const rig = makeRig();
+    await targetBased(rig);
+    await rig.t.onMessageFromTools(JSON.stringify({ id: 50, method }));
+    const inner = rig.toTarget.find((m) => m.id === 50);
+    expect(inner).toBeDefined();
+    const notFound = { error: { code: -32601, message: `'${method}' was not found` }, id: 50 };
+    await rig.t.onMessageFromTarget(
+      JSON.stringify({ method: "Target.dispatchMessageFromTarget", params: { targetId: "page-1", message: JSON.stringify(notFound) } }),
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    const replies = rig.toTools.filter((m) => m.id === 50);
+    expect(replies).toEqual([notFound]);
+  });
+}

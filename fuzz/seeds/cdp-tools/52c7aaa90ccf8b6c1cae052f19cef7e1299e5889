@@ -1,0 +1,16 @@
+IT{"method":"CSS.getStyleSheetText","params":{"styleSheetId":"0"}}
+T{"method":"CSS.addRule","params":{"styleSheetId":"0","ruleText":"h1 { outline: 1px solid red }","location":{"startLine":0,"startColumn":0,"endLine":0,"endColumn":0}}}
+T{"method":"CSS.getMediaQueries","params":{}}
+T{"method":"CSS.trackComputedStyleUpdates","params":{"propertiesToTrack":[]}}
+T{"method":"DOM.performSearch","params":{"query":"h1","includeUserAgentShadowDOM":false}}
+T{"method":"DOM.getSearchResults","params":{"searchId":"0.3","fromIndex":0,"toIndex":1}}
+T{"method":"DOM.discardSearchResults","params":{"searchId":"0.3"}}
+T{"method":"DOM.setInspectMode","params":{"mode":"searchForNode","highlightConfig":{}}}
+T{"method":"Overlay.setInspectMode","params":{"mode":"none","highlightConfig":{}}}
+T{"method":"Accessibility.getPartialAXTree","params":{"nodeId":16,"fetchRelatives":true}}
+T{"method":"DOMDebugger.getEventListeners","params":{"objectId":"x"}}
+T{"method":"DOMDebugger.setDOMBreakpoint","params":{"nodeId":16,"type":"subtree-modified"}}
+T{"method":"DOMDebugger.removeDOMBreakpoint","params":{"nodeId":16,"type":"subtree-modified"}}
+T{"method":"DOM.undo","params":{}}
+T{"method":"Page.getNavigationHistory","params":{}}
+T{"method":"Page.navigate","params":{"url":"https://example.com/"}}

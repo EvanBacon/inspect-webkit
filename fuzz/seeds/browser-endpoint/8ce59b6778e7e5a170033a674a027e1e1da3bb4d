@@ -1,0 +1,4 @@
+T{"id":5,"method":"Runtime.enable","params":{},"sessionId":"7b970c13-9f2d-42dd-9593-b6502cda13bd"}
+T{"id":6,"method":"Runtime.evaluate","params":{"expression":"location.href"},"sessionId":"7b970c13-9f2d-42dd-9593-b6502cda13bd"}
+T{"id":7,"method":"Target.detachFromTarget","params":{"sessionId":"7b970c13-9f2d-42dd-9593-b6502cda13bd"}}
+T{"id":8,"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":false,"flatten":true}}

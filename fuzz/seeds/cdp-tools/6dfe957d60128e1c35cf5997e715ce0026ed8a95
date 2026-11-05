@@ -1,0 +1,16 @@
+AT{"method":"DOM.enable","params":{}}
+T{"method":"DOM.getDocument","params":{"depth":1}}
+T{"method":"Runtime.enable","params":{}}
+T{"method":"Debugger.enable","params":{}}
+T{"method":"Page.enable","params":{}}
+T{"method":"DOM.enable","params":{}}
+T{"method":"CSS.enable","params":{}}
+T{"method":"Network.enable","params":{}}
+T{"method":"Log.enable","params":{}}
+T{"method":"Console.enable","params":{}}
+T{"method":"Target.setAutoAttach","params":{"autoAttach":true,"waitForDebuggerOnStart":false,"flatten":true}}
+T{"method":"Page.getResourceTree","params":{}}
+T{"method":"Page.getNavigationHistory","params":{}}
+T{"method":"DOM.getDocument","params":{"depth":1}}
+T{"method":"Network.getCookies","params":{}}
+T{"method":"Network.getAllCookies","params":{}}
