@@ -3,8 +3,8 @@
 // every tools-side request that a filter chokes on gets a CDP error reply.
 
 import { test, expect } from "bun:test";
-import { Target } from "../target";
-import { installIOSFilters } from "../ios-protocol";
+import { Target } from "../target.js";
+import { installIOSFilters } from "../ios-protocol.js";
 
 function makeRig(opts: { filters?: boolean; targetBased?: boolean } = {}) {
   const toTools: any[] = [];
