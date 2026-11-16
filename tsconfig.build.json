@@ -1,6 +1,12 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    // Emit declarations under Node's ESM resolution rules so that every
+    // relative specifier in dist/**/*.d.ts must carry an explicit ".js"
+    // extension (TS2834/TS2835 otherwise). Consumers on node16/nodenext
+    // can't resolve extensionless specifiers. See issue #4.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "noEmit": false,
     "emitDeclarationOnly": true,
     "declaration": true,

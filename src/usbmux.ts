@@ -12,9 +12,9 @@
 // (socket, stream) pair to whoever called us.
 
 import * as net from "node:net";
-import { encodeXml, decodeXml, type PlistValue } from "./plist";
-import { ByteStream } from "./stream";
-import { attachStream } from "./socket";
+import { encodeXml, decodeXml, type PlistValue } from "./plist.js";
+import { ByteStream } from "./stream.js";
+import { attachStream } from "./socket.js";
 
 export type DeviceProperties = {
   ConnectionType: string;

@@ -3,23 +3,23 @@
 // Programmatic entry points for listing iOS Safari / WKWebView debug targets
 // and bridging them to the Chrome DevTools Protocol.
 
-import * as usbmux from "./usbmux";
-import * as sim from "./sim";
-import { LockdownClient } from "./lockdown";
-import { WebInspectorClient } from "./webinspector";
+import * as usbmux from "./usbmux.js";
+import * as sim from "./sim.js";
+import { LockdownClient } from "./lockdown.js";
+import { WebInspectorClient } from "./webinspector.js";
 
 export {
   startCdpServer,
   type CdpServerOptions,
   type CdpServer,
-} from "./cdp/server";
+} from "./cdp/server.js";
 export {
   startBunCdpServer,
   type BunCdpServerOptions,
   type BunCdpServer,
   type BunUpstream,
-} from "./cdp/bun-server";
-export type { Device, DeviceProperties } from "./usbmux";
+} from "./cdp/bun-server.js";
+export type { Device, DeviceProperties } from "./usbmux.js";
 
 export type Target = {
   source: "device" | "simulator";
