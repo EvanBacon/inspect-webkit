@@ -1,5 +1,5 @@
-import type { Target } from "../target";
-import { swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import { swallowWith } from "../domain.js";
 
 export function installDomDebuggerFilters(t: Target) {
   // CDP DOMDebugger.getEventListeners(objectId) → WIR

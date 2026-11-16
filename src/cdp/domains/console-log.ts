@@ -1,6 +1,6 @@
-import type { Target } from "../target";
-import type { DomainCtx } from "../domain";
-import { swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import type { DomainCtx } from "../domain.js";
+import { swallowWith } from "../domain.js";
 
 export function installConsoleLogFilters(t: Target, ctx: DomainCtx) {
   // Log.startViolationsReport / stopViolationsReport: Chrome-only lint hook

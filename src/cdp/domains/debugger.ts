@@ -1,5 +1,5 @@
-import type { Target, CdpMessage } from "../target";
-import { type DomainCtx, swallowWith } from "../domain";
+import type { Target, CdpMessage } from "../target.js";
+import { type DomainCtx, swallowWith } from "../domain.js";
 
 // CDP↔WIR debugger differences: setBreakpoint/ByUrl param wrapping
 // (CDP uses top-level `condition`, WIR nests under `options`); call-frame
