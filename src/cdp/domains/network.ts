@@ -5,9 +5,9 @@
 // Everything is table-driven on purpose — keeps this file short and makes
 // it obvious which fields differ from CDP.
 
-import type { Target, CdpMessage } from "../target";
-import { isPlainObject, swallowWith } from "../domain";
-import type { IoCache } from "./io";
+import type { Target, CdpMessage } from "../target.js";
+import { isPlainObject, swallowWith } from "../domain.js";
+import type { IoCache } from "./io.js";
 
 // CDP -> WIR method renames for pure tools-side passthroughs.
 // Param shapes already line up (verified against WebKit Network.json /

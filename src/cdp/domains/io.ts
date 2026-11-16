@@ -1,4 +1,4 @@
-import type { Target } from "../target";
+import type { Target } from "../target.js";
 
 // CDP `IO` domain. WIR has no real stream-IO surface — handles are produced
 // by other domains (e.g. HeapProfiler) and `IO.read` / `IO.close` consume

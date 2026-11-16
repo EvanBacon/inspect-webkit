@@ -1,5 +1,5 @@
-import type { Target } from "../target";
-import { swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import { swallowWith } from "../domain.js";
 
 // Overlay domain. CDP's Overlay maps to WIR's `DOM.highlight*` family, plus
 // `Page.setShowPaintRects`. DevTools' Elements panel uses these for hover
