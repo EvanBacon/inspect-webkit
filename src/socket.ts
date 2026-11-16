@@ -2,7 +2,7 @@
 
 import type * as net from "node:net";
 import type * as tls from "node:tls";
-import { ByteStream } from "./stream";
+import { ByteStream } from "./stream.js";
 
 export type AnySocket = net.Socket | tls.TLSSocket;
 
