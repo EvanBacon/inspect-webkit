@@ -1,4 +1,4 @@
-import type { Target } from "../target";
+import type { Target } from "../target.js";
 
 // CDP `Input` ↔ WIR. WIR's Input surface is thin and version-dependent
 // (`Input.dispatchKeyEvent` / `Input.dispatchMouseEvent` exist in some
