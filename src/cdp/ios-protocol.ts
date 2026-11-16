@@ -13,25 +13,25 @@
 // orchestrator that wires up shared per-session state and installs each
 // domain in the original registration order.
 
-import type { Target } from "./target";
-import { makeDomainCtx } from "./domain";
-import { installDebuggerFilters } from "./domains/debugger";
-import { installRuntimeFilters } from "./domains/runtime";
-import { installConsoleLogFilters } from "./domains/console-log";
-import { installDomFilters } from "./domains/dom";
-import { installDomDebuggerFilters } from "./domains/dom-debugger";
-import { installPageFilters } from "./domains/page";
-import { installOverlayFilters } from "./domains/overlay";
-import { installEmulationFilters } from "./domains/emulation";
-import { installNetworkFilters } from "./domains/network";
-import { installTargetFilters } from "./domains/target";
-import { installInspectorFilters } from "./domains/inspector";
-import { installCssFilters } from "./domains/css";
-import { installBrowserFilters } from "./domains/browser";
-import { installInputFilters } from "./domains/input";
-import { installIoFilters } from "./domains/io";
-import { installAccessibilityFilters } from "./domains/accessibility";
-import { installCdpOnlyStubs } from "./domains/cdp-only-stubs";
+import type { Target } from "./target.js";
+import { makeDomainCtx } from "./domain.js";
+import { installDebuggerFilters } from "./domains/debugger.js";
+import { installRuntimeFilters } from "./domains/runtime.js";
+import { installConsoleLogFilters } from "./domains/console-log.js";
+import { installDomFilters } from "./domains/dom.js";
+import { installDomDebuggerFilters } from "./domains/dom-debugger.js";
+import { installPageFilters } from "./domains/page.js";
+import { installOverlayFilters } from "./domains/overlay.js";
+import { installEmulationFilters } from "./domains/emulation.js";
+import { installNetworkFilters } from "./domains/network.js";
+import { installTargetFilters } from "./domains/target.js";
+import { installInspectorFilters } from "./domains/inspector.js";
+import { installCssFilters } from "./domains/css.js";
+import { installBrowserFilters } from "./domains/browser.js";
+import { installInputFilters } from "./domains/input.js";
+import { installIoFilters } from "./domains/io.js";
+import { installAccessibilityFilters } from "./domains/accessibility.js";
+import { installCdpOnlyStubs } from "./domains/cdp-only-stubs.js";
 
 export function installIOSFilters(t: Target) {
   // Per-session state — kept on a closure-local context object (NOT

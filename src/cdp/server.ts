@@ -21,12 +21,12 @@
 
 import { WebSocketServer, type WebSocket as WSWebSocket } from "ws";
 import type { AddressInfo } from "node:net";
-import * as usbmux from "../usbmux";
-import { LockdownClient } from "../lockdown";
-import { WebInspectorClient, type WIMessage } from "../webinspector";
-import * as sim from "../sim";
-import { Target as CdpTarget } from "./target";
-import { installIOSFilters } from "./ios-protocol";
+import * as usbmux from "../usbmux.js";
+import { LockdownClient } from "../lockdown.js";
+import { WebInspectorClient, type WIMessage } from "../webinspector.js";
+import * as sim from "../sim.js";
+import { Target as CdpTarget } from "./target.js";
+import { installIOSFilters } from "./ios-protocol.js";
 import {
   type CdpServerBaseOptions,
   WS_MAX_PAYLOAD,
@@ -35,8 +35,8 @@ import {
   logCdpServerBanner,
   rejectUpgrade,
   safeDecode,
-} from "./http";
-import { attachBrowserWs, type PageSessionHandle } from "./browser-endpoint";
+} from "./http.js";
+import { attachBrowserWs, type PageSessionHandle } from "./browser-endpoint.js";
 
 export type Source = {
   kind: "device" | "simulator";

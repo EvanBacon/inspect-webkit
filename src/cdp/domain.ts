@@ -2,7 +2,7 @@
 // installXxxFilters(t, ctx) function. Kept tiny on purpose — only patterns
 // used by 3+ filters live here.
 
-import type { Target, CdpMessage } from "./target";
+import type { Target, CdpMessage } from "./target.js";
 
 /** Per-session state shared across multiple domains. Each field is a
  *  mutable holder so domains can read/write the same value through the

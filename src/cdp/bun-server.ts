@@ -5,9 +5,9 @@
 // ws:// URL; we treat that URL as the target id.
 
 import { WebSocketServer, type WebSocket as WSWebSocket } from "ws";
-import { Target as CdpTarget } from "./target";
-import { installIOSFilters } from "./ios-protocol";
-import { BunInspectorClient } from "../bun/source";
+import { Target as CdpTarget } from "./target.js";
+import { installIOSFilters } from "./ios-protocol.js";
+import { BunInspectorClient } from "../bun/source.js";
 import type { AddressInfo } from "node:net";
 import {
   type CdpServerBaseOptions,
@@ -17,7 +17,7 @@ import {
   logCdpServerBanner,
   rejectUpgrade,
   safeDecode,
-} from "./http";
+} from "./http.js";
 
 export type BunUpstream = {
   /** Upstream Bun inspector WebSocket URL, e.g. ws://127.0.0.1:6499/abc */
