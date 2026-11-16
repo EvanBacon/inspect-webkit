@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { encodeXml, decodeXml, decodeBinary, decode } from "../plist";
+import { encodeXml, decodeXml, decodeBinary, decode } from "../plist.js";
 
 test("xml roundtrip — primitives", () => {
   const v = {

@@ -1,7 +1,7 @@
 // WebInspectorClient regression tests over an in-memory socket.
 
 import { test, expect } from "bun:test";
-import { frame, makeFakeWir, sendListing, waitUntil } from "./helpers/fake-wir";
+import { frame, makeFakeWir, sendListing, waitUntil } from "./helpers/fake-wir.js";
 
 test("getListing(appId) ignores listings for other apps (R9)", async () => {
   const rig = makeFakeWir();

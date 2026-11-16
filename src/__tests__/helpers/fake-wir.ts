@@ -4,10 +4,10 @@
 
 import { EventEmitter } from "node:events";
 import * as net from "node:net";
-import { encodeXml, decode, type PlistValue } from "../../plist";
-import { ByteStream } from "../../stream";
-import { attachStream } from "../../socket";
-import { WebInspectorClient, type WIMessage } from "../../webinspector";
+import { encodeXml, decode, type PlistValue } from "../../plist.js";
+import { ByteStream } from "../../stream.js";
+import { attachStream } from "../../socket.js";
+import { WebInspectorClient, type WIMessage } from "../../webinspector.js";
 
 /** Minimal net.Socket stand-in: records writes, emits data/close on demand. */
 export class FakeSocket extends EventEmitter {
