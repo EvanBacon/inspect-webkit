@@ -21,7 +21,7 @@
 // Filters return the (possibly rewritten) message, or null to swallow it.
 
 import type { WebSocket as WSWebSocket } from "ws";
-import type { WebInspectorClient } from "../webinspector";
+import type { WebInspectorClient } from "../webinspector.js";
 
 export type CdpMessage = {
   id?: number;

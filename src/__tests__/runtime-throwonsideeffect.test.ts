@@ -1,8 +1,8 @@
 import { test, expect } from "bun:test";
-import { installRuntimeFilters } from "../cdp/domains/runtime";
-import { makeDomainCtx } from "../cdp/domain";
-import type { Target } from "../cdp/target";
-import type { CdpMessage } from "../cdp/target";
+import { installRuntimeFilters } from "../cdp/domains/runtime.js";
+import { makeDomainCtx } from "../cdp/domain.js";
+import type { Target } from "../cdp/target.js";
+import type { CdpMessage } from "../cdp/target.js";
 
 // Minimal Target stand-in for filter tests. We exercise the filter
 // pipeline directly: register filters, hand it a tools-side message,

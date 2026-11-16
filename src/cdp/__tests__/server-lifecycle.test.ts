@@ -5,14 +5,14 @@
 // it (R7).
 
 import { test, expect, afterEach } from "bun:test";
-import { startCdpServer, type CdpServer } from "../server";
+import { startCdpServer, type CdpServer } from "../server.js";
 import {
   freePort,
   makeFakeWir,
   seedApp,
   sendListing,
   waitUntil,
-} from "../../__tests__/helpers/fake-wir";
+} from "../../__tests__/helpers/fake-wir.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {

@@ -1,4 +1,4 @@
-import type { Target } from "../target";
+import type { Target } from "../target.js";
 
 // WIR fires `Inspector.inspect` with a RemoteObject when the user clicks an
 // element while inspect mode is enabled. CDP's equivalent is

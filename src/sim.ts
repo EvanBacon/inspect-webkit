@@ -9,8 +9,8 @@
 
 import * as net from "node:net";
 import { spawnSync } from "node:child_process";
-import { ByteStream } from "./stream";
-import { attachStream } from "./socket";
+import { ByteStream } from "./stream.js";
+import { attachStream } from "./socket.js";
 
 export type SimRuntime = {
   socketPath: string;

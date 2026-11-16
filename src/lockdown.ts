@@ -12,10 +12,10 @@
 // Each service runs on its own usbmux tunnel — we don't multiplex.
 
 import * as tls from "node:tls";
-import { encodeXml, decodeXml, type PlistValue } from "./plist";
-import * as usbmux from "./usbmux";
-import { ByteStream } from "./stream";
-import { attachStream, type AnySocket } from "./socket";
+import { encodeXml, decodeXml, type PlistValue } from "./plist.js";
+import * as usbmux from "./usbmux.js";
+import { ByteStream } from "./stream.js";
+import { attachStream, type AnySocket } from "./socket.js";
 
 const LOCKDOWN_PORT = 62078;
 const debug = (...args: unknown[]) => {

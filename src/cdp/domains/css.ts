@@ -8,7 +8,7 @@
 //  - WIR's CSSStyleSheetHeader lacks isMutable/isConstructed/length/end{Line,Column};
 //    backfill conservatively in transformHeader.
 
-import type { Target } from "../target";
+import type { Target } from "../target.js";
 
 type Range = { startLine: number; startColumn: number; endLine: number; endColumn: number };
 type WirStyleId = { styleSheetId: string; ordinal: number };

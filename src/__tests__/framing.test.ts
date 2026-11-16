@@ -1,10 +1,10 @@
 // Length-prefix guards in the usbmux / lockdown frame readers.
 
 import { test, expect } from "bun:test";
-import * as usbmux from "../usbmux";
-import * as lockdown from "../lockdown";
-import { ByteStream } from "../stream";
-import { FakeSocket } from "./helpers/fake-wir";
+import * as usbmux from "../usbmux.js";
+import * as lockdown from "../lockdown.js";
+import { ByteStream } from "../stream.js";
+import { FakeSocket } from "./helpers/fake-wir.js";
 
 function u32(n: number, le: boolean): Uint8Array {
   const b = new Uint8Array(4);

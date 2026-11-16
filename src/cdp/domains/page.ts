@@ -1,5 +1,5 @@
-import type { Target } from "../target";
-import { swallowWith, type DomainCtx } from "../domain";
+import type { Target } from "../target.js";
+import { swallowWith, type DomainCtx } from "../domain.js";
 
 // Page domain. Most CDP Page methods either pass straight through to WIR
 // (Safari's `Page` domain matches the CDP shape closely) or are pure stubs

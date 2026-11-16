@@ -2,8 +2,8 @@
 // Target.* methods locally. It is unrelated to the per-session `Target`
 // class in ../target.ts (the type imported below) — only the names overlap.
 
-import type { Target } from "../target";
-import { swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import { swallowWith } from "../domain.js";
 
 export function installTargetFilters(t: Target) {
   // Modern Chrome DevTools sends Target.setAutoAttach({autoAttach,flatten})

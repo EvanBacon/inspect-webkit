@@ -14,9 +14,9 @@
 //   3. for each app, send _rpc_forwardGetListing: { ConnectionId, AppId }
 //   4. receive _rpc_applicationSentListing: WIRListingKey -> pages
 
-import { encodeXml, decode, type PlistValue } from "./plist";
-import { ByteStream } from "./stream";
-import { type AnySocket } from "./socket";
+import { encodeXml, decode, type PlistValue } from "./plist.js";
+import { ByteStream } from "./stream.js";
+import { type AnySocket } from "./socket.js";
 
 export type WIPage = {
   pageId: number;

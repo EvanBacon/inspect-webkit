@@ -1,5 +1,5 @@
-import type { Target } from "../target";
-import { isPlainObject, swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import { isPlainObject, swallowWith } from "../domain.js";
 
 export function installDomFilters(t: Target) {
   // Guards DOM.discardSearchResults against unknown ids (Safari errors loudly).

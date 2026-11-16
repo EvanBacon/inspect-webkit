@@ -1,5 +1,5 @@
-import type { Target } from "../target";
-import { type DomainCtx, isPlainObject, swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import { type DomainCtx, isPlainObject, swallowWith } from "../domain.js";
 
 // Runtime domain translation. Most CDP Runtime methods map 1:1 onto WIR's
 // Runtime, so the bulk of work here is reshaping responses (evaluate-with-

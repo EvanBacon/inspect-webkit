@@ -7,8 +7,8 @@
 import { test, expect, afterEach } from "bun:test";
 import * as net from "node:net";
 import * as os from "node:os";
-import { startCdpServer } from "../server";
-import { startBunCdpServer } from "../bun-server";
+import { startCdpServer } from "../server.js";
+import { startBunCdpServer } from "../bun-server.js";
 import {
   freePort,
   httpGet,
@@ -18,7 +18,7 @@ import {
   statusOf,
   waitUntil,
   wsUpgrade,
-} from "../../__tests__/helpers/fake-wir";
+} from "../../__tests__/helpers/fake-wir.js";
 
 type Started = { stop(): void; port: number; pagePath: string };
 
