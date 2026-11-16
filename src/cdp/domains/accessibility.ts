@@ -1,5 +1,5 @@
-import type { Target } from "../target";
-import { swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import { swallowWith } from "../domain.js";
 
 // CDP `Accessibility` ↔ WIR. WIR exposes accessibility through the DOM
 // domain (`DOM.getAccessibilityPropertiesForNode`), not a top-level

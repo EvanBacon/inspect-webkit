@@ -1,5 +1,5 @@
-import type { Target } from "../target";
-import { swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import { swallowWith } from "../domain.js";
 
 // CDP `Browser` domain. Safari/WIR has no equivalent — we synthesize a
 // response from the same constants used by the HTTP `/json/version` endpoint

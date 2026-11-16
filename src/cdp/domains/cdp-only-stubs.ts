@@ -17,8 +17,8 @@
 // just need `{}`, but a few need a specific shape to avoid downstream
 // confusion (Page.addScriptToEvaluateOnNewDocument needs `{identifier}`).
 
-import type { Target } from "../target";
-import { swallowWith } from "../domain";
+import type { Target } from "../target.js";
+import { swallowWith } from "../domain.js";
 
 // Whole CDP-only domains — Safari has no equivalent at all. Any method
 // in these domains is swallowed with `{}` regardless of name.
