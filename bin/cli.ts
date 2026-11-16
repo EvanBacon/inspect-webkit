@@ -4,7 +4,7 @@
 
 import { execSync } from "node:child_process";
 import { Command, InvalidArgumentError, Option } from "commander";
-import { startCdpServer, startBunCdpServer } from "../src/index";
+import { startCdpServer, startBunCdpServer } from "../src/index.js";
 
 // Last-resort backstop: one bad frame or request must never take down
 // every attached debugging session. Library code handles its own errors;
